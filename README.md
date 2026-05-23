@@ -107,8 +107,11 @@ Install and have your USB Rubber Ducky working in less than 5 minutes.
 
 11. Copy `duckyinpython.py`, `code.py`, `pins.py`, `webapp.py`, `wsgiserver.py` to the root folder of the Pico.
 
-12. *For Pico W Only* Create the file `secrets.py` in the root of the Pico W. This contains the AP name and password to be created by the Pico W.  
+12. *For Pico W Only* Create the file `secrets.py` in the root of the Pico W. This contains the AP name and password to be created by the Pico W.
 `secrets = { 'ssid' : "BadAPName", 'password' : "badpassword" }`
+   Use a long, unguessable password — anyone on the AP can reach the web UI.
+   Optionally also create `creds.py` to require login for the web UI (see
+   *Web UI authentication* below).
 
 13. Find a script [here](https://github.com/hak5/usbrubberducky-payloads) or [create your own one using Ducky Script](https://docs.hak5.org/hak5-usb-rubber-ducky/ducky-script-basics/hello-world) and save it as `payload.dd` in the Pico. Currently, pico-ducky only supports DuckyScript 1.0, and some of 3.0.
 
@@ -117,22 +120,60 @@ Install and have your USB Rubber Ducky working in less than 5 minutes.
 15. **Please note:** by default Pico W will not show as a USB drive
 
 ### Pico W Web Service
-The Pico W AP defaults to ip address `192.168.4.1`.  You should be able to find the webservice at `http://192.168.4.1:80`  
+The Pico W AP defaults to ip address `192.168.4.1`. The web UI is at `http://192.168.4.1/`.
 
-The following endpoints are available on the webservice:
+The interface is a modern, dark-themed control panel that runs entirely on the
+device — no external CDNs, no internet required. Features:
+
+- **Payload manager** with size column and live filter / search
+- **Editor** with snippet quick-insert sidebar (RUN, GUI, DELAY, IF/ELSE, WHILE, etc.)
+- **Upload** any local `.dd` file via the browser (read client-side, posted as text)
+- **Download** existing payloads to your machine
+- **Rename** and **delete** with confirmation dialogs
+- **Snippets** reference page with copy-to-clipboard
+- **System** page showing board id, AP IP, uptime, free memory, CPU temperature,
+  filesystem state, and a one-click reboot
+- **POST-only** destructive actions in the new UI (run / delete / write / rename)
+- **Optional HTTP Basic authentication** — see "Web UI authentication" below
+- **Hardened input handling**: path-traversal-proof filenames, robust form
+  parsing (no longer breaks on `=` in script bodies), 64 KB payload size cap,
+  always-restored read-only filesystem mount, and security response headers
+  (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, no-store).
+
+Routes:
 ```
-/
-/new
-/ducky
-/edit/<filename>
-/write/<filename>
-/run/<filename>
+GET  /                      list payloads
+GET  /new          POST     create a new script
+GET  /edit/<name>           open the editor
+POST /write/<name>          save changes
+POST /delete/<name>         delete a payload
+GET  /rename/<name> POST    rename a payload
+GET  /download/<name>       download as text/plain
+POST /run/<name>            execute now
+GET  /upload                upload from local file
+GET  /snippets              DuckyScript snippet library
+GET  /system                live device status
+POST /system/reboot         soft reboot
 ```
 
-API endpoints
+Machine-friendly API:
 ```
-/api/run/<filenumber>
+GET  /api/payloads          tab-separated list of name<TAB>size
+GET  /api/run/<filenumber>  run payload N (1..4 mapped to payload[N].dd)
 ```
+
+### Web UI authentication
+
+To gate the web UI, create a `creds.py` next to `code.py` on the device:
+
+```py
+WEB_USERNAME = "admin"
+WEB_PASSWORD = "use-a-strong-password"
+```
+
+When `creds.py` is present, every request requires HTTP Basic credentials.
+If absent, the UI is open (legacy behaviour) and you should rely on a strong
+WiFi password in `secrets.py`.
 
 ## Setup mode
 

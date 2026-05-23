@@ -120,60 +120,116 @@ Install and have your USB Rubber Ducky working in less than 5 minutes.
 15. **Please note:** by default Pico W will not show as a USB drive
 
 ### Pico W Web Service
-The Pico W AP defaults to ip address `192.168.4.1`. The web UI is at `http://192.168.4.1/`.
+The Pico W AP defaults to IP address `192.168.4.1`. The web UI is at
+`http://192.168.4.1/`. Everything is served inline — no CDNs, no internet.
 
-The interface is a modern, dark-themed control panel that runs entirely on the
-device — no external CDNs, no internet required. Features:
+#### First-run setup wizard
+On the very first visit (when `creds.py` is missing) every URL is redirected
+to `/setup`. Pick a username, an 8+ character password, and optionally an API
+token, and submit. The wizard writes `creds.py` to the device for you and
+locks down the UI behind HTTP Basic auth.
 
-- **Payload manager** with size column and live filter / search
-- **Editor** with snippet quick-insert sidebar (RUN, GUI, DELAY, IF/ELSE, WHILE, etc.)
-- **Upload** any local `.dd` file via the browser (read client-side, posted as text)
-- **Download** existing payloads to your machine
-- **Rename** and **delete** with confirmation dialogs
-- **Snippets** reference page with copy-to-clipboard
-- **System** page showing board id, AP IP, uptime, free memory, CPU temperature,
-  filesystem state, and a one-click reboot
-- **POST-only** destructive actions in the new UI (run / delete / write / rename)
-- **Optional HTTP Basic authentication** — see "Web UI authentication" below
-- **Hardened input handling**: path-traversal-proof filenames, robust form
-  parsing (no longer breaks on `=` in script bodies), 64 KB payload size cap,
-  always-restored read-only filesystem mount, and security response headers
-  (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, no-store).
+#### UI features
+- **Dark / light theme** toggle (top-right) with per-browser persistence
+- **Payload manager** with size column, live filter, and per-row actions
+  (Edit, Preview, Download, Clone, Run, Delete) — every destructive action
+  requires confirmation
+- **Editor** with snippet quick-insert sidebar, live line/byte counter,
+  `Ctrl+S` / `Cmd+S` to save, and automatic draft auto-save to localStorage
+  (restored if you reopen with unsaved changes)
+- **Syntax-highlighted preview** page (`/preview/<name>`) — commands,
+  strings, numbers, `$variables` and operators colorized
+- **DuckyScript linter** — runs on save, surfaces typos in command names,
+  missing arguments, non-numeric `DELAY` values, and runs of consecutive
+  `DELAY`s. Warnings are shown but never block a save.
+- **Upload** any local `.dd` file (browser reads it, posts as text)
+- **Download** payloads as text attachments
+- **Duplicate / Rename / Delete** with proper validation
+- **Wipe all** payloads (double-confirm) for fast cleanup
+- **Snippets** reference page with one-click copy-to-clipboard
+- **Audit log** at `/audit` showing recent actions (auth fails, payload
+  edits, runs, reboots, wipes…), with bounded size and a Clear button
+- **System** page with board, AP IP, uptime, free/used RAM, CPU temperature,
+  filesystem state, connected stations, auth/API status, recent-fail count,
+  and a one-click reboot
+- **Logout** button forces the browser to drop cached Basic Auth credentials
 
-Routes:
+#### Security hardening
+- **HTTP Basic auth** with constant-time credential comparison
+- **Login rate limiting** — 5 failed attempts within 5 minutes returns
+  `429 Too Many Requests` and an audit entry
+- **CSRF tokens** required on every POST endpoint
+- **Path-traversal-proof** filenames (`..`, `/`, hidden, non-`.dd` rejected)
+- **64 KB hard cap** on payload size; oversize bodies rejected early
+- **POST-only** destructive actions (run / delete / write / rename / wipe /
+  duplicate / reboot / clear-log)
+- **Robust form parser** — survives `=` inside script bodies (was a bug
+  in the original implementation)
+- **Filesystem writes** wrapped in `try/finally remount-readonly`, so the
+  device is *never* left writable after an exception
+- **Response headers**: strict `Content-Security-Policy`,
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, and a
+  restrictive `Permissions-Policy`
+- **HTML escaping everywhere** — payload names and contents can never inject
+  HTML into the UI
+- **Audit log** at `/audit.log` for forensic review
+
+#### Routes
 ```
+GET  /setup         POST    first-run credential wizard
 GET  /                      list payloads
-GET  /new          POST     create a new script
+GET  /new           POST    create a new script
 GET  /edit/<name>           open the editor
-POST /write/<name>          save changes
-POST /delete/<name>         delete a payload
-GET  /rename/<name> POST    rename a payload
+POST /write/<name>          save changes (CSRF)
+POST /delete/<name>         delete a payload (CSRF)
+POST /duplicate/<name>      clone a payload (CSRF)
+GET  /rename/<name>  POST   rename a payload (CSRF on POST)
 GET  /download/<name>       download as text/plain
-POST /run/<name>            execute now
+GET  /preview/<name>        syntax-highlighted view
+POST /run/<name>            execute now (CSRF on POST, GET also accepted)
+POST /wipe                  delete every .dd file (CSRF)
 GET  /upload                upload from local file
 GET  /snippets              DuckyScript snippet library
+GET  /audit                 view audit log
+POST /audit/clear           clear audit log (CSRF)
 GET  /system                live device status
-POST /system/reboot         soft reboot
+POST /system/reboot         soft reboot (CSRF)
+GET  /logout                drop cached Basic Auth credentials
 ```
 
-Machine-friendly API:
+#### Machine-friendly API
+All `/api/*` endpoints accept either the web UI's Basic Auth or — when
+`API_TOKEN` is set in `creds.py` — `Authorization: Bearer <token>` or a
+`?token=<token>` query parameter.
+
 ```
 GET  /api/payloads          tab-separated list of name<TAB>size
 GET  /api/run/<filenumber>  run payload N (1..4 mapped to payload[N].dd)
+GET  /api/system            JSON of every System-page stat
 ```
 
 ### Web UI authentication
 
-To gate the web UI, create a `creds.py` next to `code.py` on the device:
+The fastest way is to let the **setup wizard** create `creds.py` for you on
+first visit. If you'd rather provision it manually, drop a `creds.py` next
+to `code.py` on the device:
 
 ```py
 WEB_USERNAME = "admin"
 WEB_PASSWORD = "use-a-strong-password"
+API_TOKEN    = "optional-32-char-token-for-automation"
 ```
 
-When `creds.py` is present, every request requires HTTP Basic credentials.
-If absent, the UI is open (legacy behaviour) and you should rely on a strong
-WiFi password in `secrets.py`.
+When `creds.py` is present, every web request requires HTTP Basic
+credentials. If absent, the device boots into setup mode on first visit
+and refuses to do anything else until you set credentials.
+
+### Keyboard shortcuts (editor)
+- `Ctrl+S` / `Cmd+S` — save
+- Click a snippet in the sidebar — insert at cursor
+- Reopen a payload after closing the tab without saving — the editor
+  offers to restore your unsaved draft
 
 ## Setup mode
 

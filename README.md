@@ -130,29 +130,49 @@ token, and submit. The wizard writes `creds.py` to the device for you and
 locks down the UI behind HTTP Basic auth.
 
 #### UI features
-- **Dark / light theme** toggle (top-right) with per-browser persistence
+- **Animated aurora backdrop** — subtle CSS-only gradient that drifts behind
+  the cards; respects the dark/light theme
+- **Dark / light theme** toggle in the header, persisted to `localStorage`
+- **Toast notifications** — flash messages slide in from the corner and
+  auto-dismiss after ~4.5 seconds (replaces the old top-banner alerts)
+- **Inline SVG icons** throughout every nav link, button, action, header,
+  and stat tile — no external icon font, no CDN, no FOUC
+- **Header status indicator** — coloured dot showing the device's current
+  auth posture (`secured` / `open` / `locked`), with `secured/open/locked`
+  label visible in the header
+- **Hero stat tiles** on the dashboard (payload count, uptime, free RAM,
+  storage %) plus a "Recently edited" row
 - **Payload manager** with size column, live filter, and per-row actions
   (Edit, Preview, Download, Clone, Run, Delete) — every destructive action
   requires confirmation
 - **Editor** with snippet quick-insert sidebar, live line/byte counter,
-  `Ctrl+S` / `Cmd+S` to save, and automatic draft auto-save to localStorage
-  (restored if you reopen with unsaved changes)
+  `Ctrl+S` / `Cmd+S` to save, **backup-on-save** with one-click "Restore
+  previous" button, and automatic draft auto-save to localStorage
 - **Syntax-highlighted preview** page (`/preview/<name>`) — commands,
   strings, numbers, `$variables` and operators colorized
 - **DuckyScript linter** — runs on save, surfaces typos in command names,
   missing arguments, non-numeric `DELAY` values, and runs of consecutive
   `DELAY`s. Warnings are shown but never block a save.
-- **Upload** any local `.dd` file (browser reads it, posts as text)
+- **Drag-and-drop upload** — drop a local `.dd` onto the upload page (or
+  click to browse). File is read in the browser and posted as text.
+- **Content search** at `/search` — substring search across all payload
+  contents with highlighted matches; press `/` to focus the search box
+- **Keyboard-shortcuts modal** — press `?` anywhere outside a text field
+  to bring up the shortcut reference (Esc to close)
+- **Mobile hamburger menu** — on phones the nav collapses behind a menu
+  button; everything reflows to a single column
+- **Storage usage bar** on the system page, plus connected-stations count,
+  auth state, API-token state, recent-failed-login count, CPU temperature
 - **Download** payloads as text attachments
-- **Duplicate / Rename / Delete** with proper validation
+- **Duplicate / Rename / Delete** with proper validation; the .bak backup
+  follows a rename and gets removed with its payload
 - **Wipe all** payloads (double-confirm) for fast cleanup
 - **Snippets** reference page with one-click copy-to-clipboard
 - **Audit log** at `/audit` showing recent actions (auth fails, payload
-  edits, runs, reboots, wipes…), with bounded size and a Clear button
-- **System** page with board, AP IP, uptime, free/used RAM, CPU temperature,
-  filesystem state, connected stations, auth/API status, recent-fail count,
-  and a one-click reboot
+  edits, runs, restores, reboots, wipes…), with bounded size and a Clear button
 - **Logout** button forces the browser to drop cached Basic Auth credentials
+- **Health endpoint** at `/health` (no auth, no setup gate) returning
+  `ok` plain text — useful for uptime monitors
 
 #### Security hardening
 - **HTTP Basic auth** with constant-time credential comparison
@@ -181,21 +201,24 @@ GET  /setup         POST    first-run credential wizard
 GET  /                      list payloads
 GET  /new           POST    create a new script
 GET  /edit/<name>           open the editor
-POST /write/<name>          save changes (CSRF)
-POST /delete/<name>         delete a payload (CSRF)
+POST /write/<name>          save changes (CSRF) — auto-backs-up to <name>.bak
+POST /restore/<name>        restore from <name>.bak (CSRF)
+POST /delete/<name>         delete a payload and its backup (CSRF)
 POST /duplicate/<name>      clone a payload (CSRF)
-GET  /rename/<name>  POST   rename a payload (CSRF on POST)
+GET  /rename/<name>  POST   rename a payload + backup (CSRF on POST)
 GET  /download/<name>       download as text/plain
 GET  /preview/<name>        syntax-highlighted view
 POST /run/<name>            execute now (CSRF on POST, GET also accepted)
 POST /wipe                  delete every .dd file (CSRF)
-GET  /upload                upload from local file
+GET  /upload                drag-and-drop upload from local file
 GET  /snippets              DuckyScript snippet library
+GET  /search?q=...          content search across all payloads
 GET  /audit                 view audit log
 POST /audit/clear           clear audit log (CSRF)
 GET  /system                live device status
 POST /system/reboot         soft reboot (CSRF)
 GET  /logout                drop cached Basic Auth credentials
+GET  /health                public liveness check ("ok" 200)
 ```
 
 #### Machine-friendly API
@@ -225,8 +248,11 @@ When `creds.py` is present, every web request requires HTTP Basic
 credentials. If absent, the device boots into setup mode on first visit
 and refuses to do anything else until you set credentials.
 
-### Keyboard shortcuts (editor)
-- `Ctrl+S` / `Cmd+S` — save
+### Keyboard shortcuts
+- `?` — open the shortcuts modal (anywhere outside a text field)
+- `Esc` — close any open modal
+- `Ctrl+S` / `Cmd+S` — save (in the editor)
+- `/` — focus the search box (on the search page)
 - Click a snippet in the sidebar — insert at cursor
 - Reopen a payload after closing the tab without saving — the editor
   offers to restore your unsaved draft

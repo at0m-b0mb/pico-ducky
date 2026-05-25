@@ -1,15 +1,9 @@
 # License : GPLv2.0
 # Original copyright (c) 2023  Dave Bailey (dbisu, @daveisu)
-# Enhanced web interface for the Pico W Ducky:
-#   Security:  HTTP Basic + CSRF + per-process token + lockout, audit log,
-#              path-traversal proof filenames, FS always restored read-only,
-#              CSP/X-Frame/Referrer/Permissions headers, API token for /api/*.
-#   UX:        Dark/light theme, animated aurora backdrop, toast notifications,
-#              SVG icons, hero stat tiles, snippet sidebar, syntax-highlighted
-#              preview, lint-on-save with non-blocking warnings, draft auto-save,
-#              Ctrl+S, drag-and-drop upload, backup-on-save with restore,
-#              keyboard-shortcuts modal, content search, storage usage bar,
-#              status indicator, mobile hamburger nav.
+# Pico W Ducky web interface — heavily enhanced.
+#
+# This file is intentionally self-contained so that "copy webapp.py + boot.py +
+# code.py + pins.py + duckyinpython.py + secrets.py" remains the install flow.
 
 import gc
 import os
@@ -30,9 +24,9 @@ except ImportError:
 
 from duckyinpython import *
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Credentials (optional — first-run setup wizard creates this file)
-# ---------------------------------------------------------------------------
+# ===========================================================================
 try:
     from creds import WEB_USERNAME, WEB_PASSWORD
 except ImportError:
@@ -46,9 +40,9 @@ except ImportError:
 
 AUTH_ENABLED = bool(WEB_USERNAME) and bool(WEB_PASSWORD)
 
-# ---------------------------------------------------------------------------
-# Config / limits
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Config / limits / paths
+# ===========================================================================
 MAX_PAYLOAD_BYTES = 64 * 1024
 MAX_FILENAME_LEN = 48
 PAYLOAD_EXT = ".dd"
@@ -56,15 +50,19 @@ BACKUP_EXT = ".dd.bak"
 CREDS_PATH = "/creds.py"
 AUDIT_LOG_PATH = "/audit.log"
 AUDIT_LOG_MAX = 32 * 1024
+PINS_PATH = "/pins.txt"
 ALLOWED_NAME_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-."
 )
 
 BOOT_TIME = time.monotonic()
 
+# Login rate limiting (global; WSGI server doesn't reliably surface peer IP)
 LOCKOUT_THRESHOLD = 5
 LOCKOUT_SECONDS = 300
 _failed_attempts = []
+
+ACCENT_THEMES = ("cyan", "violet", "emerald", "amber", "rose", "sky")
 
 
 def _make_csrf():
@@ -75,9 +73,9 @@ def _make_csrf():
 CSRF_TOKEN = _make_csrf()
 
 
-# ---------------------------------------------------------------------------
-# Basic helpers
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Tiny helpers
+# ===========================================================================
 def file_exists(name):
     try:
         os.stat(name)
@@ -99,6 +97,17 @@ def html_escape(s):
              .replace(">", "&gt;")
              .replace('"', "&quot;")
              .replace("'", "&#39;"))
+
+
+def js_escape(s):
+    """Escape for embedding inside a single-quoted JS string."""
+    if s is None:
+        return ""
+    return (s.replace("\\", "\\\\")
+             .replace("'", "\\'")
+             .replace("\n", "\\n")
+             .replace("\r", "\\r")
+             .replace("</", "<\\/"))
 
 
 def py_escape(s):
@@ -147,9 +156,9 @@ def file_mtime(name):
         return 0
 
 
-# ---------------------------------------------------------------------------
-# Icons (inline SVG, monochrome, scales with text colour)
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Icon system (inline SVG)
+# ===========================================================================
 ICONS = {
     "edit":     '<path d="M11.5 1.5l3 3-8 8H3.5v-3l8-8z"/>',
     "preview":  '<path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2.5"/>',
@@ -177,6 +186,23 @@ ICONS = {
     "ok":       '<circle cx="8" cy="8" r="6.5"/><path d="M5 8.2l2 2 4-4.4"/>',
     "back":     '<path d="M14 8H2M6 4L2 8l4 4"/>',
     "drag":     '<circle cx="6" cy="3.5" r="1"/><circle cx="10" cy="3.5" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="6" cy="12.5" r="1"/><circle cx="10" cy="12.5" r="1"/>',
+    "star":     '<path d="M8 1.7l1.96 4.1L14.5 6.5l-3.35 3 .92 4.5L8 11.8l-4.07 2.2.92-4.5-3.35-3 4.54-.7z"/>',
+    "tag":      '<path d="M2 8.5l6.5-6.5h5v5L7 13.5z"/><circle cx="11" cy="5" r=".7" fill="currentColor"/>',
+    "settings": '<circle cx="8" cy="8" r="2.5"/><path d="M13 8c0 .5-.05.9-.13 1.3l1.4 1-1.5 2.6-1.6-.5c-.6.5-1.3.9-2 1.1L9 15h-3l-.3-1.5c-.7-.2-1.4-.6-2-1.1l-1.6.5L.6 10.3l1.4-1A6 6 0 0 1 2 8c0-.4.05-.8.13-1.2L.7 5.7l1.5-2.6 1.6.5c.6-.5 1.3-.9 2-1.1L6 1h3l.3 1.5c.7.2 1.4.6 2 1.1l1.6-.5 1.5 2.6-1.4 1c.1.4.15.8.15 1.3z"/>',
+    "copy":     '<rect x="5" y="5" width="9" height="9" rx="1"/><path d="M3 11V3a1 1 0 0 1 1-1h7"/>',
+    "find":     '<circle cx="7" cy="7" r="4"/><path d="M10 10l3.5 3.5M2 13.5l1.5-1.5"/>',
+    "sort":     '<path d="M3 5l3-3 3 3"/><path d="M13 11l-3 3-3-3"/>',
+    "filter":   '<path d="M2 3h12L9.5 9v5L6.5 12V9z"/>',
+    "close":    '<path d="M4 4l8 8M12 4l-8 8"/>',
+    "save":     '<path d="M3 2h8l2 2v10H3z"/><path d="M5 2v4h6V2M5 14v-5h6v5"/>',
+    "more":     '<circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/>',
+    "diff":     '<path d="M5 1v14M11 1v14M2 5h6M8 11h6"/>',
+    "template": '<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 6h12M5 9h6M5 11h4"/>',
+    "wand":     '<path d="M2 14l9-9M12 4l1.5-1.5M11 3l-.7-.7M13 5l.7.7M9 1.5v1M14 6.5v1"/>',
+    "refresh":  '<path d="M14 8a6 6 0 1 1-1.8-4.3"/><path d="M14 2v4h-4"/>',
+    "send":     '<path d="M14 2L2 7l5 2 2 5z"/>',
+    "wifi":     '<path d="M2 6a8 8 0 0 1 12 0"/><path d="M4 9a5 5 0 0 1 8 0"/><circle cx="8" cy="12.5" r="1"/>',
+    "shield":   '<path d="M8 1.5L2.5 4v5c0 3 2.5 5 5.5 6 3-1 5.5-3 5.5-6V4z"/>',
 }
 
 
@@ -187,22 +213,33 @@ def icon(name, cls="ico"):
             'aria-hidden="true">%s</svg>' % (cls, body))
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # CSS
-# ---------------------------------------------------------------------------
+# ===========================================================================
 BASE_CSS = """
 :root{
  --bg:#070b18;--panel:rgba(17,26,46,.78);--panel-2:#172241;--border:#22304d;
  --muted:#7c8bab;--text:#e6edf7;--accent:#22d3ee;--accent-2:#7c3aed;
  --danger:#f43f5e;--ok:#10b981;--warn:#f59e0b;--input-bg:#0a1226;
- --radius:12px;--shadow:0 10px 28px rgba(0,0,0,.35);
+ --radius:12px;--shadow:0 10px 28px rgba(0,0,0,.35);--accent-rgb:34,211,238;
 }
 html[data-theme="light"]{
  --bg:#f6f8fc;--panel:rgba(255,255,255,.78);--panel-2:#f1f5f9;--border:#dbe3ee;
  --muted:#64748b;--text:#0f172a;--accent:#0891b2;--accent-2:#7c3aed;
  --danger:#dc2626;--ok:#059669;--warn:#d97706;--input-bg:#ffffff;
- --shadow:0 10px 28px rgba(15,23,42,.08);
+ --shadow:0 10px 28px rgba(15,23,42,.08);--accent-rgb:8,145,178;
 }
+html[data-theme="oled"]{
+ --bg:#000000;--panel:rgba(10,16,28,.85);--panel-2:#0d1424;--border:#1a2440;
+ --muted:#7c8bab;--text:#e6edf7;--input-bg:#05080f;
+ --shadow:0 10px 32px rgba(0,0,0,.7);
+}
+html[data-accent="cyan"]{--accent:#22d3ee;--accent-2:#7c3aed;--accent-rgb:34,211,238}
+html[data-accent="violet"]{--accent:#a78bfa;--accent-2:#22d3ee;--accent-rgb:167,139,250}
+html[data-accent="emerald"]{--accent:#34d399;--accent-2:#22d3ee;--accent-rgb:52,211,153}
+html[data-accent="amber"]{--accent:#fbbf24;--accent-2:#fb7185;--accent-rgb:251,191,36}
+html[data-accent="rose"]{--accent:#fb7185;--accent-2:#a78bfa;--accent-rgb:251,113,133}
+html[data-accent="sky"]{--accent:#38bdf8;--accent-2:#a78bfa;--accent-rgb:56,189,248}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,sans-serif;
@@ -211,13 +248,13 @@ html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
 body::before{
  content:"";position:fixed;inset:-20vmax;z-index:-1;pointer-events:none;
  background:
-  radial-gradient(circle at 20% 15%, rgba(34,211,238,.18), transparent 45%),
+  radial-gradient(circle at 20% 15%, rgba(var(--accent-rgb),.20), transparent 45%),
   radial-gradient(circle at 80% 75%, rgba(124,58,237,.22), transparent 45%),
   radial-gradient(circle at 50% 90%, rgba(244,63,94,.10), transparent 50%);
- filter:blur(20px);
- animation:aurora 24s ease-in-out infinite alternate;
+ filter:blur(20px);animation:aurora 24s ease-in-out infinite alternate;
 }
 html[data-theme="light"] body::before{opacity:.55}
+html[data-theme="oled"] body::before{opacity:.35}
 @keyframes aurora{
  0%{transform:translate(0,0) rotate(0deg) scale(1)}
  50%{transform:translate(2vw,-3vh) rotate(2deg) scale(1.05)}
@@ -225,7 +262,7 @@ html[data-theme="light"] body::before{opacity:.55}
 }
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
-.wrap{max-width:1000px;margin:0 auto;padding:24px 16px 60px}
+.wrap{max-width:1040px;margin:0 auto;padding:24px 16px 80px}
 header.app{display:flex;align-items:center;justify-content:space-between;gap:10px;
  padding:14px 22px;background:linear-gradient(135deg,var(--panel),var(--panel-2));
  border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20;
@@ -235,20 +272,21 @@ header.app .brand .logo{width:32px;height:32px;border-radius:9px;
  background:linear-gradient(135deg,var(--accent),var(--accent-2));
  display:inline-flex;align-items:center;justify-content:center;
  color:#06121f;font-weight:800;font-size:16px;
- box-shadow:0 4px 14px rgba(34,211,238,.35)}
+ box-shadow:0 4px 14px rgba(var(--accent-rgb),.35)}
 .brand .sub{color:var(--muted);font-weight:500;font-size:12px;margin-left:2px}
 nav.app{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
 nav.app a{padding:7px 12px;border-radius:999px;font-size:14px;color:var(--muted);
  display:inline-flex;align-items:center;gap:6px;transition:.15s}
-nav.app a.active,nav.app a:hover{background:rgba(34,211,238,.12);
+nav.app a.active,nav.app a:hover{background:rgba(var(--accent-rgb),.12);
  color:var(--text);text-decoration:none}
 nav.app a.active{color:var(--accent)}
 .icon-btn{background:transparent;border:1px solid var(--border);color:var(--text);
  width:36px;height:36px;border-radius:999px;cursor:pointer;display:inline-flex;
  align-items:center;justify-content:center;font-size:14px;
- transition:background .15s,border-color .15s,transform .1s}
-.icon-btn:hover{background:var(--panel-2);border-color:var(--accent)}
+ transition:background .15s,border-color .15s,transform .1s;position:relative}
+.icon-btn:hover{background:var(--panel-2);border-color:var(--accent);color:var(--accent)}
 .icon-btn:active{transform:scale(.95)}
+.icon-btn.active{color:var(--accent);border-color:var(--accent)}
 .nav-toggle{display:none}
 .status{display:inline-flex;align-items:center;gap:6px;font-size:12px;
  color:var(--muted);margin-right:6px}
@@ -275,17 +313,18 @@ h3{font-size:13px;color:var(--muted);font-weight:600;text-transform:uppercase;
 .muted{color:var(--muted)}
 .ico{width:14px;height:14px;display:inline-block;vertical-align:-2px;flex-shrink:0}
 .ico-lg{width:18px;height:18px}
+.ico-xl{width:32px;height:32px}
 .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;
  border:1px solid var(--border);background:var(--panel-2);color:var(--text);
  border-radius:9px;font-size:14px;cursor:pointer;text-decoration:none;
  font-family:inherit;position:relative;overflow:hidden;
  transition:background .15s,border-color .15s,transform .08s,color .15s}
-.btn:hover{background:rgba(34,211,238,.08);border-color:var(--accent);
+.btn:hover{background:rgba(var(--accent-rgb),.08);border-color:var(--accent);
  color:var(--text);text-decoration:none}
 .btn:active{transform:translateY(1px)}
-.btn.primary{background:linear-gradient(135deg,var(--accent),#0891b2);
+.btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));
  color:#06121f;border-color:transparent;font-weight:600;
- box-shadow:0 6px 18px rgba(34,211,238,.28)}
+ box-shadow:0 6px 18px rgba(var(--accent-rgb),.28)}
 .btn.primary:hover{filter:brightness(1.08);color:#06121f}
 .btn.primary::after{content:"";position:absolute;top:0;left:-100%;width:100%;height:100%;
  background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent);
@@ -295,6 +334,8 @@ h3{font-size:13px;color:var(--muted);font-weight:600;text-transform:uppercase;
 .btn.danger:hover{background:rgba(244,63,94,.12);color:var(--danger)}
 .btn.warn{background:transparent;color:var(--warn);border-color:rgba(245,158,11,.4)}
 .btn.warn:hover{background:rgba(245,158,11,.12);color:var(--warn)}
+.btn.ok{background:transparent;color:var(--ok);border-color:rgba(16,185,129,.4)}
+.btn.ok:hover{background:rgba(16,185,129,.12);color:var(--ok)}
 .btn.ghost{background:transparent}
 .btn.small{padding:5px 10px;font-size:13px;border-radius:7px}
 .btn[disabled]{opacity:.5;cursor:not-allowed}
@@ -302,8 +343,8 @@ h3{font-size:13px;color:var(--muted);font-weight:600;text-transform:uppercase;
  width:100%;padding:11px 13px;background:var(--input-bg);color:var(--text);
  border:1px solid var(--border);border-radius:9px;font-size:14px;
  font-family:inherit;outline:none;transition:border-color .15s,box-shadow .15s}
-.input:focus,textarea:focus{border-color:var(--accent);
- box-shadow:0 0 0 3px rgba(34,211,238,.15)}
+.input:focus,textarea:focus,select:focus{border-color:var(--accent);
+ box-shadow:0 0 0 3px rgba(var(--accent-rgb),.15)}
 textarea{resize:vertical;min-height:260px;line-height:1.55;tab-size:4;
  font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:13px}
 label{display:block;margin-bottom:6px;font-size:13px;color:var(--muted)}
@@ -311,18 +352,34 @@ label{display:block;margin-bottom:6px;font-size:13px;color:var(--muted)}
 table{width:100%;border-collapse:collapse}
 th,td{padding:11px 12px;text-align:left;border-bottom:1px solid var(--border)}
 th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;
- color:var(--muted);font-weight:600}
+ color:var(--muted);font-weight:600;user-select:none}
+th.sortable{cursor:pointer}
+th.sortable:hover{color:var(--accent)}
+th.sortable::after{content:"";display:inline-block;width:0;height:0;margin-left:6px;
+ vertical-align:middle;border-left:4px solid transparent;border-right:4px solid transparent;
+ border-top:4px solid currentColor;opacity:0}
+th.sortable.asc::after{border-bottom:4px solid currentColor;border-top:none;opacity:1}
+th.sortable.desc::after{opacity:1}
 tr:last-child td{border-bottom:none}
-tr:hover td{background:rgba(34,211,238,.04)}
+tr:hover td{background:rgba(var(--accent-rgb),.04)}
+tr.pinned td{background:rgba(var(--accent-rgb),.05)}
+.checkbox{accent-color:var(--accent);width:16px;height:16px;cursor:pointer}
 .badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;
- background:rgba(34,211,238,.1);color:var(--accent);
- border:1px solid rgba(34,211,238,.25);font-weight:600}
+ background:rgba(var(--accent-rgb),.1);color:var(--accent);
+ border:1px solid rgba(var(--accent-rgb),.25);font-weight:600}
 .badge.muted{background:var(--panel-2);color:var(--muted);border-color:var(--border)}
+.chip{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;
+ border-radius:999px;font-size:11px;background:var(--panel-2);
+ border:1px solid var(--border);color:var(--muted);
+ margin:1px 2px;text-decoration:none}
+.chip:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+.chip.active{background:rgba(var(--accent-rgb),.12);color:var(--accent);
+ border-color:var(--accent)}
 .alert{padding:12px 14px;border-radius:10px;margin-bottom:14px;
  border:1px solid var(--border)}
 .alert.ok{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.35);color:#10b981}
 .alert.err{background:rgba(244,63,94,.1);border-color:rgba(244,63,94,.35);color:#f43f5e}
-.alert.info{background:rgba(34,211,238,.08);border-color:rgba(34,211,238,.3);color:var(--accent)}
+.alert.info{background:rgba(var(--accent-rgb),.08);border-color:rgba(var(--accent-rgb),.3);color:var(--accent)}
 .alert.warn{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.35);color:#f59e0b}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
 .stat{background:var(--panel-2);border:1px solid var(--border);
@@ -374,7 +431,7 @@ html[data-theme="light"] .tok-var{color:#6d28d9}
  text-align:center;color:var(--muted);transition:.2s;cursor:pointer;
  background:rgba(255,255,255,.02)}
 .dropzone:hover,.dropzone.over{border-color:var(--accent);
- background:rgba(34,211,238,.06);color:var(--text)}
+ background:rgba(var(--accent-rgb),.06);color:var(--text)}
 .dropzone svg{width:44px;height:44px;margin-bottom:10px;opacity:.7}
 .dropzone .name{margin-top:8px;color:var(--accent);font-family:ui-monospace,monospace;font-size:13px}
 .bar{height:8px;background:var(--input-bg);border-radius:999px;overflow:hidden;
@@ -395,14 +452,17 @@ html[data-theme="light"] .tok-var{color:#6d28d9}
 .toast.warn{border-left:3px solid var(--warn);color:var(--warn)}
 .toast.info{border-left:3px solid var(--accent);color:var(--accent)}
 .toast .msg{color:var(--text);font-size:14px;flex:1}
+.toast .close{background:transparent;border:none;color:var(--muted);cursor:pointer;
+ padding:0;display:inline-flex}
+.toast .close:hover{color:var(--text)}
 .modal-back{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:60;
  display:none;align-items:center;justify-content:center;padding:20px;
  -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
 .modal-back.open{display:flex;animation:fadeIn .2s ease}
 @keyframes fadeIn{from{opacity:0}}
 .modal{background:var(--panel);border:1px solid var(--border);
- border-radius:var(--radius);padding:22px;max-width:480px;width:100%;
- box-shadow:var(--shadow)}
+ border-radius:var(--radius);padding:22px;max-width:520px;width:100%;
+ box-shadow:var(--shadow);max-height:80vh;overflow:auto}
 .modal h2{margin-bottom:14px}
 .kbd-row{display:flex;justify-content:space-between;align-items:center;
  padding:8px 0;border-bottom:1px solid var(--border);font-size:14px}
@@ -412,8 +472,68 @@ html[data-theme="light"] .tok-var{color:#6d28d9}
 .search-result a{font-weight:600}
 .search-result .line{font-family:ui-monospace,monospace;font-size:12px;
  color:var(--muted);margin-top:4px;white-space:pre-wrap;word-break:break-all}
-.search-result mark{background:rgba(34,211,238,.25);color:var(--text);
+.search-result mark{background:rgba(var(--accent-rgb),.25);color:var(--text);
  padding:0 2px;border-radius:3px}
+/* Editor: line numbers + sticky save bar */
+.editor-wrap{position:relative;display:flex;border:1px solid var(--border);
+ border-radius:9px;overflow:hidden;background:var(--input-bg)}
+.line-nums{margin:0;padding:11px 8px 11px 12px;background:rgba(0,0,0,.18);
+ color:var(--muted);font-family:ui-monospace,monospace;font-size:13px;
+ line-height:1.55;text-align:right;user-select:none;border-right:1px solid var(--border);
+ overflow:hidden;white-space:pre;min-width:42px}
+.editor-wrap textarea{border:none;border-radius:0;flex:1;outline:none;
+ box-shadow:none;background:transparent}
+.editor-wrap textarea:focus{box-shadow:none}
+.sticky-bar{position:sticky;bottom:0;background:linear-gradient(180deg,
+ transparent 0%,var(--panel) 30%,var(--panel) 100%);padding:14px 0 4px;
+ margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.tags-row{margin:6px 0 0;display:flex;flex-wrap:wrap;align-items:center;gap:2px}
+.bulk-bar{position:sticky;top:64px;background:var(--panel);border:1px solid var(--accent);
+ border-radius:9px;padding:8px 12px;margin-bottom:10px;display:none;
+ align-items:center;gap:8px;z-index:5;
+ box-shadow:0 4px 14px rgba(var(--accent-rgb),.18)}
+.bulk-bar.open{display:flex;animation:slideDown .2s ease}
+@keyframes slideDown{from{opacity:0;transform:translateY(-8px)}}
+.accent-swatch{width:22px;height:22px;border-radius:999px;border:2px solid var(--border);
+ cursor:pointer;transition:.15s;padding:0;background:transparent}
+.accent-swatch.active{border-color:var(--text);transform:scale(1.1)}
+.accent-swatch[data-c="cyan"]{background:linear-gradient(135deg,#22d3ee,#7c3aed)}
+.accent-swatch[data-c="violet"]{background:linear-gradient(135deg,#a78bfa,#22d3ee)}
+.accent-swatch[data-c="emerald"]{background:linear-gradient(135deg,#34d399,#22d3ee)}
+.accent-swatch[data-c="amber"]{background:linear-gradient(135deg,#fbbf24,#fb7185)}
+.accent-swatch[data-c="rose"]{background:linear-gradient(135deg,#fb7185,#a78bfa)}
+.accent-swatch[data-c="sky"]{background:linear-gradient(135deg,#38bdf8,#a78bfa)}
+.diff-row{display:grid;grid-template-columns:60px 1fr;gap:8px;
+ padding:2px 8px;font-family:ui-monospace,monospace;font-size:12px;
+ white-space:pre-wrap;word-break:break-all}
+.diff-row .gutter{color:var(--muted);text-align:right;user-select:none}
+.diff-row.add{background:rgba(16,185,129,.08);color:#10b981}
+.diff-row.del{background:rgba(244,63,94,.08);color:#f43f5e}
+.diff-row.add .gutter,.diff-row.del .gutter{color:inherit}
+.template-card{display:flex;gap:14px;padding:14px;border:1px solid var(--border);
+ border-radius:10px;margin-bottom:10px;background:var(--panel-2);
+ transition:.15s;text-decoration:none;color:var(--text)}
+.template-card:hover{border-color:var(--accent);transform:translateY(-1px);
+ text-decoration:none}
+.template-card .ico-host{flex-shrink:0;width:42px;height:42px;border-radius:9px;
+ background:rgba(var(--accent-rgb),.12);display:flex;align-items:center;
+ justify-content:center;color:var(--accent)}
+.template-card .body{flex:1}
+.template-card h2{font-size:15px;margin:0 0 4px}
+.template-card p{margin:0;font-size:13px;color:var(--muted)}
+.dropdown{position:relative;display:inline-block}
+.dropdown-menu{display:none;position:absolute;right:0;top:calc(100% + 4px);
+ background:var(--panel);border:1px solid var(--border);border-radius:9px;
+ padding:6px;min-width:180px;z-index:30;box-shadow:var(--shadow);
+ -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.dropdown.open .dropdown-menu{display:block;animation:fadeIn .15s ease}
+.dropdown-menu button,.dropdown-menu a{display:flex;align-items:center;gap:8px;
+ padding:7px 10px;border-radius:7px;background:transparent;border:none;
+ width:100%;text-align:left;color:var(--text);font-size:13px;font-family:inherit;
+ cursor:pointer;text-decoration:none}
+.dropdown-menu button:hover,.dropdown-menu a:hover{background:var(--panel-2);
+ color:var(--accent);text-decoration:none}
+.dropdown-menu button.danger{color:var(--danger)}
 @media(max-width:760px){
  header.app{flex-wrap:wrap;padding:12px 14px}
  .nav-toggle{display:inline-flex}
@@ -424,37 +544,53 @@ html[data-theme="light"] .tok-var{color:#6d28d9}
  .wrap{padding:16px 12px}
  th.hide-sm,td.hide-sm{display:none}
  .toast-host{top:auto;bottom:20px;right:12px;left:12px;max-width:none}
+ .bulk-bar{top:140px}
 }
 """
 
 THEME_BOOT_JS = (
-    "(function(){try{var t=localStorage.getItem('pdtheme')||'dark';"
-    "document.documentElement.setAttribute('data-theme',t)}catch(e){}})();"
+    "(function(){try{"
+    "var t=localStorage.getItem('pdtheme')||'dark';"
+    "var a=localStorage.getItem('pdaccent')||'cyan';"
+    "document.documentElement.setAttribute('data-theme',t);"
+    "document.documentElement.setAttribute('data-accent',a);"
+    "}catch(e){}})();"
 )
 
-# Global JS (toast auto-dismiss, hamburger nav, keyboard shortcuts modal)
 GLOBAL_JS = """
 (function(){
-  // Toast auto-dismiss
+  // Toasts: auto-dismiss + manual close
   setTimeout(function(){
     document.querySelectorAll('.toast').forEach(function(t){
       t.classList.add('fade');
       setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t)},350);
     });
   },4500);
+  document.querySelectorAll('.toast .close').forEach(function(b){
+    b.addEventListener('click',function(){
+      var t=b.parentNode;t.classList.add('fade');
+      setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t)},250);
+    });
+  });
   // Mobile nav toggle
   var nt=document.getElementById('navToggle'),na=document.getElementById('navMain');
   if(nt&&na)nt.addEventListener('click',function(){na.classList.toggle('open')});
-  // Theme toggle
+  // Theme toggle (cycles dark → light → oled)
   var tb=document.getElementById('themeBtn');
   if(tb)tb.addEventListener('click',function(){
-    var d=document.documentElement,t=d.getAttribute('data-theme')==='light'?'dark':'light';
-    d.setAttribute('data-theme',t);try{localStorage.setItem('pdtheme',t)}catch(e){}
+    var d=document.documentElement,cur=d.getAttribute('data-theme')||'dark';
+    var next=cur==='dark'?'light':cur==='light'?'oled':'dark';
+    d.setAttribute('data-theme',next);
+    try{localStorage.setItem('pdtheme',next)}catch(e){}
   });
   // Keyboard shortcuts modal
   var km=document.getElementById('kbdModal');
   function openKM(){if(km)km.classList.add('open')}
-  function closeKM(){if(km)km.classList.remove('open')}
+  function closeKM(){
+    document.querySelectorAll('.modal-back.open').forEach(function(m){
+      m.classList.remove('open');
+    });
+  }
   document.addEventListener('keydown',function(e){
     var tag=(e.target&&e.target.tagName)||'';
     var inField=tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT';
@@ -463,24 +599,241 @@ GLOBAL_JS = """
   });
   var kbBtn=document.getElementById('kbdBtn');
   if(kbBtn)kbBtn.addEventListener('click',openKM);
-  if(km)km.addEventListener('click',function(e){if(e.target===km)closeKM()});
-  var kc=document.getElementById('kbdClose');
-  if(kc)kc.addEventListener('click',closeKM);
+  document.querySelectorAll('.modal-back').forEach(function(m){
+    m.addEventListener('click',function(e){if(e.target===m)closeKM()});
+  });
+  document.querySelectorAll('[data-close-modal]').forEach(function(b){
+    b.addEventListener('click',closeKM);
+  });
+  // Dropdowns
+  document.querySelectorAll('.dropdown > .icon-btn, .dropdown > .btn').forEach(function(b){
+    b.addEventListener('click',function(e){
+      e.stopPropagation();
+      var d=b.parentNode;
+      document.querySelectorAll('.dropdown.open').forEach(function(o){
+        if(o!==d)o.classList.remove('open');
+      });
+      d.classList.toggle('open');
+    });
+  });
+  document.addEventListener('click',function(){
+    document.querySelectorAll('.dropdown.open').forEach(function(o){
+      o.classList.remove('open');
+    });
+  });
 })();
 """
 
 
-# ---------------------------------------------------------------------------
-# Layout
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Pins
+# ===========================================================================
+def read_pins():
+    if not file_exists(PINS_PATH):
+        return set()
+    try:
+        with open(PINS_PATH, "r") as f:
+            return set(ln.strip() for ln in f.read().splitlines() if ln.strip())
+    except OSError:
+        return set()
+
+
+def write_pins(pins):
+    try:
+        storage.remount("/", readonly=False)
+        with open(PINS_PATH, "w") as f:
+            for p in sorted(pins):
+                f.write(p + "\n")
+    finally:
+        try:
+            storage.remount("/", readonly=True)
+        except Exception:
+            pass
+
+
+def toggle_pin(name):
+    pins = read_pins()
+    if name in pins:
+        pins.discard(name)
+        action = "off"
+    else:
+        pins.add(name)
+        action = "on"
+    write_pins(pins)
+    return action
+
+
+# ===========================================================================
+# Tags (parsed from `REM TAGS: a, b, c` in first 20 lines)
+# ===========================================================================
+def parse_tags(text, max_lines=20):
+    tags = []
+    if not text:
+        return tags
+    for i, line in enumerate(text.splitlines()):
+        if i >= max_lines:
+            break
+        s = line.strip()
+        u = s.upper()
+        if u.startswith("REM TAGS:") or u.startswith("REM TAGS "):
+            body = s.split(":", 1)[1] if ":" in s else s[8:]
+            for t in body.split(","):
+                t = t.strip().lower()
+                if t and len(t) <= 20 and all(
+                        c.isalpha() or c.isdigit() or c in "_-" for c in t):
+                    if t not in tags:
+                        tags.append(t)
+            break
+    return tags
+
+
+def tags_for(name):
+    """Read the first 2 KB of a file and parse tags from it."""
+    try:
+        with open(name, "r") as f:
+            head = f.read(2048)
+    except OSError:
+        return []
+    return parse_tags(head)
+
+
+# ===========================================================================
+# Templates library
+# ===========================================================================
+TEMPLATES = [
+    {
+        "key": "hello",
+        "name": "Hello, world",
+        "desc": "Open a text editor and type a greeting. Safe starter.",
+        "tags": "starter,demo",
+        "body": (
+            "REM TAGS: starter, demo\n"
+            "REM Open Notepad (Windows) and say hi.\n"
+            "DEFAULT_DELAY 50\n"
+            "GUI r\n"
+            "DELAY 300\n"
+            "STRING notepad\n"
+            "ENTER\n"
+            "DELAY 800\n"
+            "STRINGLN Hello from the Pico Ducky!\n"
+        ),
+    },
+    {
+        "key": "win_recon",
+        "name": "Windows: open PowerShell",
+        "desc": "Launch an elevated-ish PowerShell window for recon work.",
+        "tags": "windows,powershell",
+        "body": (
+            "REM TAGS: windows, powershell\n"
+            "DEFAULT_DELAY 75\n"
+            "GUI r\n"
+            "DELAY 300\n"
+            "STRING powershell\n"
+            "ENTER\n"
+        ),
+    },
+    {
+        "key": "win_lock",
+        "name": "Windows: lock the screen",
+        "desc": "Hit Win+L. Useful as a panic/finish step.",
+        "tags": "windows,safety",
+        "body": (
+            "REM TAGS: windows, safety\n"
+            "GUI l\n"
+        ),
+    },
+    {
+        "key": "mac_spotlight",
+        "name": "macOS: open Spotlight",
+        "desc": "Cmd+Space then type. Cross-platform via COMMAND key.",
+        "tags": "macos",
+        "body": (
+            "REM TAGS: macos\n"
+            "DEFAULT_DELAY 60\n"
+            "COMMAND SPACE\n"
+            "DELAY 250\n"
+            "STRING TextEdit\n"
+            "ENTER\n"
+            "DELAY 1000\n"
+            "STRINGLN Hello from the Pico Ducky!\n"
+        ),
+    },
+    {
+        "key": "loop",
+        "name": "Repeat with a counter",
+        "desc": "WHILE loop that types 'tick' five times. Good template for retries.",
+        "tags": "control-flow,demo",
+        "body": (
+            "REM TAGS: control-flow, demo\n"
+            "VAR $I = 0\n"
+            "WHILE ( $I < 5 )\n"
+            "  STRING tick\n"
+            "  ENTER\n"
+            "  $I = $I + 1\n"
+            "END_WHILE\n"
+        ),
+    },
+    {
+        "key": "if_caps",
+        "name": "Branch on caps-lock",
+        "desc": "Pick a different action depending on host caps-lock state.",
+        "tags": "control-flow",
+        "body": (
+            "REM TAGS: control-flow\n"
+            "IF ( $_CAPSLOCK_ON == TRUE ) THEN\n"
+            "  STRINGLN caps was on\n"
+            "ELSE\n"
+            "  STRINGLN caps was off\n"
+            "END_IF\n"
+        ),
+    },
+    {
+        "key": "random",
+        "name": "Random ID",
+        "desc": "Print a random integer in a range.",
+        "tags": "demo",
+        "body": (
+            "REM TAGS: demo\n"
+            "$_RANDOM_MIN = 1000\n"
+            "$_RANDOM_MAX = 9999\n"
+            "STRINGLN ID = $_RANDOM_INT\n"
+        ),
+    },
+    {
+        "key": "exfil",
+        "name": "Exfil mode opt-in",
+        "desc": "Enables loot capture. Read README before using.",
+        "tags": "exfil,advanced",
+        "body": (
+            "REM TAGS: exfil, advanced\n"
+            "REM $_EXFIL_MODE_ENABLED = TRUE\n"
+            "REM $_EXFIL_LEDS_ENABLED = TRUE\n"
+            "REM Place your post-exfil keystrokes below.\n"
+        ),
+    },
+]
+
+
+def template_by_key(key):
+    for t in TEMPLATES:
+        if t["key"] == key:
+            return t
+    return None
+
+
+# ===========================================================================
+# Layout chrome
+# ===========================================================================
 NAV_ITEMS = (
-    ("home",     "/",         "Payloads", "snippet"),
-    ("new",      "/new",      "New",      "plus"),
-    ("upload",   "/upload",   "Upload",   "upload"),
-    ("search",   "/search",   "Search",   "search"),
-    ("snippets", "/snippets", "Snippets", "snippet"),
-    ("audit",    "/audit",    "Audit",    "audit"),
-    ("system",   "/system",   "System",   "system"),
+    ("home",      "/",          "Payloads",  "snippet"),
+    ("new",       "/new",       "New",       "plus"),
+    ("templates", "/templates", "Templates", "template"),
+    ("upload",    "/upload",    "Upload",    "upload"),
+    ("search",    "/search",    "Search",    "search"),
+    ("snippets",  "/snippets",  "Snippets",  "wand"),
+    ("audit",     "/audit",     "Audit",     "audit"),
+    ("system",    "/system",    "System",    "system"),
+    ("settings",  "/settings",  "Settings",  "settings"),
 )
 
 
@@ -494,12 +847,12 @@ def nav_html(active):
 
 
 def status_indicator():
-    if not AUTH_ENABLED:
-        return ('<span class="status" title="Auth disabled">'
-                '<span class="status-dot warn"></span>open</span>')
     if is_locked_out():
         return ('<span class="status" title="Locked out">'
                 '<span class="status-dot err"></span>locked</span>')
+    if not AUTH_ENABLED:
+        return ('<span class="status" title="Auth disabled">'
+                '<span class="status-dot warn"></span>open</span>')
     return ('<span class="status" title="Secured">'
             '<span class="status-dot"></span>secured</span>')
 
@@ -507,10 +860,12 @@ def status_indicator():
 def kbd_modal_html():
     rows = [
         ("?", "Show this help"),
-        ("Esc", "Close modal"),
-        ("Ctrl/Cmd + S", "Save script (in editor)"),
-        ("Click snippet", "Insert at cursor (in editor)"),
+        ("Esc", "Close any open modal"),
+        ("Ctrl/Cmd + S", "Save (in editor)"),
+        ("Ctrl/Cmd + F", "Find / replace (in editor)"),
         ("/", "Focus search (on Search page)"),
+        ("Click ⭐", "Pin or unpin a payload"),
+        ("Click a snippet", "Insert at cursor (in editor)"),
     ]
     rs = ''.join(
         '<div class="kbd-row"><span>%s</span><span class="kbd">%s</span></div>'
@@ -522,79 +877,64 @@ def kbd_modal_html():
         '<div class="modal" role="dialog" aria-modal="true">'
         '<div class="row"><h2>%s Keyboard shortcuts</h2>'
         '<div class="spacer"></div>'
-        '<button class="icon-btn" id="kbdClose" title="Close">&times;</button>'
+        '<button class="icon-btn" data-close-modal title="Close">%s</button>'
         '</div>%s</div></div>'
-    ) % (icon("keyboard", "ico ico-lg"), rs)
+    ) % (icon("keyboard", "ico ico-lg"), icon("close"), rs)
 
 
 def toast_html(flash):
     if not flash:
         return ""
     kind, msg = flash
+    ico = "ok" if kind == "ok" else ("warn" if kind == "warn"
+                                     else "info" if kind == "info" else "warn")
     return (
         '<div class="toast-host"><div class="toast %s">'
         '%s<span class="msg">%s</span>'
+        '<button class="close" type="button" aria-label="Dismiss">%s</button>'
         '</div></div>'
-    ) % (kind, icon("ok" if kind == "ok" else
-                    "warn" if kind == "warn" else
-                    "info" if kind == "info" else "warn"),
-         html_escape(msg))
+    ) % (kind, icon(ico), html_escape(msg), icon("close"))
 
 
-def layout(title, body, active="home", flash=None, show_chrome=True):
-    if show_chrome:
-        header = (
-            '<header class="app"><div class="brand">'
-            '<span class="logo">D</span>Pico Ducky'
-            '<span class="sub hide-sm">&middot; secure control panel</span>'
-            '</div>%s'
-            '<nav class="app" id="navMain">%s</nav>'
-            '<div class="row" style="gap:6px">'
-            '%s'
-            '<button type="button" class="icon-btn" id="kbdBtn" title="Keyboard shortcuts (?)">%s</button>'
-            '<button type="button" class="icon-btn" id="themeBtn" title="Toggle theme">%s</button>'
-            '%s'
-            '<button type="button" class="icon-btn nav-toggle" id="navToggle" title="Menu">%s</button>'
-            '</div></header>'
-        ) % (
-            status_indicator(),
-            nav_html(active),
-            '',  # reserved
-            icon("keyboard"),
-            icon("sun"),
-            ('<a class="icon-btn" href="/logout" title="Sign out">%s</a>' % icon("logout"))
-                if AUTH_ENABLED else '',
-            icon("menu"),
-        )
-        modal = kbd_modal_html()
-    else:
-        header = ""
-        modal = ""
+def layout(title, body, active="home", flash=None):
+    header = (
+        '<header class="app"><div class="brand">'
+        '<span class="logo">D</span>Pico Ducky'
+        '<span class="sub hide-sm">&middot; secure control panel</span>'
+        '</div>%s'
+        '<nav class="app" id="navMain">%s</nav>'
+        '<div class="row" style="gap:6px">'
+        '<button type="button" class="icon-btn" id="kbdBtn" title="Keyboard shortcuts (?)">%s</button>'
+        '<button type="button" class="icon-btn" id="themeBtn" title="Theme (dark / light / oled)">%s</button>'
+        '%s'
+        '<button type="button" class="icon-btn nav-toggle" id="navToggle" title="Menu">%s</button>'
+        '</div></header>'
+    ) % (
+        status_indicator(), nav_html(active),
+        icon("keyboard"), icon("sun"),
+        ('<a class="icon-btn" href="/logout" title="Sign out">%s</a>' % icon("logout"))
+            if AUTH_ENABLED else '',
+        icon("menu"),
+    )
     return (
         '<!DOCTYPE html><html lang="en"><head>'
         '<meta charset="utf-8"><title>%s &middot; Pico Ducky</title>'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="color-scheme" content="dark light">'
-        '<style>%s</style>'
-        '<script>%s</script>'
-        '</head><body>'
-        '%s'
-        '%s'
+        '<style>%s</style><script>%s</script></head><body>'
+        '%s%s'
         '<div class="wrap">%s</div>'
-        '<footer class="app">pico-ducky &middot; secured by you '
-        '&middot; <a href="/system">system</a> '
-        '&middot; press <span class="kbd">?</span> for shortcuts'
-        '</footer>'
-        '%s'
-        '<script>%s</script>'
-        '</body></html>'
+        '<footer class="app">pico-ducky &middot; secured by you &middot; '
+        '<a href="/system">system</a> &middot; '
+        'press <span class="kbd">?</span> for shortcuts</footer>'
+        '%s<script>%s</script></body></html>'
     ) % (html_escape(title), BASE_CSS, THEME_BOOT_JS,
-         header, toast_html(flash), body, modal, GLOBAL_JS)
+         header, toast_html(flash), body, kbd_modal_html(), GLOBAL_JS)
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Request / form helpers
-# ---------------------------------------------------------------------------
+# ===========================================================================
 _hexdig = '0123456789ABCDEFabcdef'
 
 
@@ -629,13 +969,14 @@ def cleanup_text(s):
 
 def parse_form(raw):
     if raw is None:
-        return {}
+        return {}, []
     if isinstance(raw, (bytes, bytearray)):
         try:
             raw = raw.decode('utf-8')
         except UnicodeError:
             raw = raw.decode('latin-1')
     form = {}
+    multi = []  # preserve duplicates for things like checkbox lists
     for pair in raw.split('&'):
         if not pair:
             continue
@@ -643,8 +984,14 @@ def parse_form(raw):
             k, v = pair.split('=', 1)
         else:
             k, v = pair, ''
-        form[cleanup_text(k)] = cleanup_text(v)
-    return form
+        k, v = cleanup_text(k), cleanup_text(v)
+        multi.append((k, v))
+        form[k] = v
+    return form, multi
+
+
+def parse_form_single(raw):
+    return parse_form(raw)[0]
 
 
 def request_body(request):
@@ -707,9 +1054,9 @@ def query_get(request, key):
     return None
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Auth + rate limiting
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _b64decode(s):
     try:
         return binascii.a2b_base64(s).decode('utf-8', 'replace')
@@ -805,15 +1152,15 @@ def locked_response():
             layout("Locked", body))
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # CSRF
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def csrf_field():
     return '<input type="hidden" name="_csrf" value="%s">' % CSRF_TOKEN
 
 
 def csrf_ok(form):
-    token = form.get('_csrf', '')
+    token = form.get('_csrf', '') if hasattr(form, 'get') else ''
     if not token:
         return False
     return _ct_equals(token, CSRF_TOKEN)
@@ -830,9 +1177,9 @@ def csrf_failure_response():
             layout("Forbidden", body))
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Response helpers
-# ---------------------------------------------------------------------------
+# ===========================================================================
 SEC_HEADERS = (
     ("Cache-Control", "no-store"),
     ("X-Content-Type-Options", "nosniff"),
@@ -903,9 +1250,9 @@ def _to_json(v):
     return _to_json(str(v))
 
 
-# ---------------------------------------------------------------------------
-# Filename validation
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Filename validation + listing
+# ===========================================================================
 def safe_filename(name):
     if not name:
         return None
@@ -933,21 +1280,30 @@ def normalize_payload_name(name):
     return safe_filename(name)
 
 
-def list_payloads():
+def list_payloads_detailed():
+    """Returns a list of (name, size, mtime, pinned, tags)."""
+    pins = read_pins()
     out = []
     try:
         for f in os.listdir("/"):
             if f.endswith(PAYLOAD_EXT) and not f.endswith(BACKUP_EXT):
-                out.append((f, file_size(f), file_mtime(f)))
+                out.append((f, file_size(f), file_mtime(f),
+                            f in pins, tags_for(f)))
     except OSError:
         pass
-    out.sort()
+    # pinned first, then alpha
+    out.sort(key=lambda r: (0 if r[3] else 1, r[0].lower()))
     return out
 
 
-# ---------------------------------------------------------------------------
-# Filesystem writes (always restore RO; backup-on-save)
-# ---------------------------------------------------------------------------
+def list_payloads():
+    """Simple (name, size, mtime) — used by external bits."""
+    return [(n, s, m) for (n, s, m, _, _) in list_payloads_detailed()]
+
+
+# ===========================================================================
+# FS write helpers
+# ===========================================================================
 def _remount_rw():
     storage.remount("/", readonly=False)
 
@@ -983,7 +1339,6 @@ def delete_file_safely(name):
     try:
         _remount_rw()
         os.remove(name)
-        # Best-effort delete of associated backup
         bak = name + ".bak"
         if file_exists(bak):
             try:
@@ -1002,9 +1357,9 @@ def rename_file_safely(old, new):
         _remount_ro()
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Audit log
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def audit(action, details=""):
     line = "[%.1f] %s %s\n" % (time.monotonic(), action, details or "")
     try:
@@ -1051,29 +1406,73 @@ def clear_audit_log():
         _remount_ro()
 
 
-# ---------------------------------------------------------------------------
-# Credentials persistence (first-run setup)
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Credentials persistence + factory reset
+# ===========================================================================
+def _write_creds(user, pw, token):
+    lines = [
+        '# Generated by the Pico Ducky setup wizard / settings page.',
+        'WEB_USERNAME = "%s"' % py_escape(user),
+        'WEB_PASSWORD = "%s"' % py_escape(pw),
+    ]
+    if token:
+        lines.append('API_TOKEN = "%s"' % py_escape(token))
+    write_file_safely(CREDS_PATH, "\n".join(lines) + "\n", backup=False)
+
+
 def apply_credentials(username, password, api_token=""):
     global AUTH_ENABLED, WEB_USERNAME, WEB_PASSWORD, API_TOKEN, SETUP_REQUIRED
     WEB_USERNAME = username
     WEB_PASSWORD = password
     API_TOKEN = api_token or ""
     AUTH_ENABLED = bool(username and password)
-    lines = [
-        '# Generated by the Pico Ducky setup wizard.',
-        'WEB_USERNAME = "%s"' % py_escape(username),
-        'WEB_PASSWORD = "%s"' % py_escape(password),
-    ]
-    if API_TOKEN:
-        lines.append('API_TOKEN = "%s"' % py_escape(API_TOKEN))
-    write_file_safely(CREDS_PATH, "\n".join(lines) + "\n", backup=False)
+    _write_creds(username, password, API_TOKEN)
     SETUP_REQUIRED = False
 
 
-# ---------------------------------------------------------------------------
+def rotate_api_token():
+    global API_TOKEN
+    new_token = _make_csrf() + _make_csrf()  # 64 hex chars
+    API_TOKEN = new_token
+    _write_creds(WEB_USERNAME, WEB_PASSWORD, new_token)
+    return new_token
+
+
+def clear_api_token():
+    global API_TOKEN
+    API_TOKEN = ""
+    _write_creds(WEB_USERNAME, WEB_PASSWORD, "")
+
+
+def factory_reset():
+    """Wipe payloads, backups, audit log, pins, and creds."""
+    global SETUP_REQUIRED, AUTH_ENABLED, WEB_USERNAME, WEB_PASSWORD, API_TOKEN
+    try:
+        _remount_rw()
+        for f in list(os.listdir("/")):
+            if f.endswith(PAYLOAD_EXT) or f.endswith(BACKUP_EXT):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+        for p in (AUDIT_LOG_PATH, PINS_PATH, CREDS_PATH):
+            if file_exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+    finally:
+        _remount_ro()
+    WEB_USERNAME = ""
+    WEB_PASSWORD = ""
+    API_TOKEN = ""
+    AUTH_ENABLED = False
+    SETUP_REQUIRED = True
+
+
+# ===========================================================================
 # DuckyScript lint + highlighter
-# ---------------------------------------------------------------------------
+# ===========================================================================
 KNOWN_COMMANDS = frozenset([
     "REM", "REM_BLOCK", "END_REM",
     "DEFAULT_DELAY", "DEFAULTDELAY", "DELAY",
@@ -1213,9 +1612,42 @@ def highlight_payload(text):
     return ''.join(out)
 
 
-# ---------------------------------------------------------------------------
-# Flash messages (encoded in URL ?m=KEY)
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Diff (line-by-line, simple LCS-free; readability over precision)
+# ===========================================================================
+def render_diff_lines(old, new):
+    """Return HTML rows of a simple line diff between old and new."""
+    old_lines = old.splitlines()
+    new_lines = new.splitlines()
+    old_set = {l: i for i, l in enumerate(old_lines)}
+    rows = []
+    nidx = 0
+    oidx = 0
+    while nidx < len(new_lines) or oidx < len(old_lines):
+        on = old_lines[oidx] if oidx < len(old_lines) else None
+        nn = new_lines[nidx] if nidx < len(new_lines) else None
+        if on is None:
+            rows.append(('add', nidx + 1, nn)); nidx += 1
+        elif nn is None:
+            rows.append(('del', oidx + 1, on)); oidx += 1
+        elif on == nn:
+            rows.append(('ctx', nidx + 1, on)); nidx += 1; oidx += 1
+        else:
+            # If new line exists later in old, treat current old as deletion
+            if nn in old_set and old_set[nn] >= oidx:
+                rows.append(('del', oidx + 1, on)); oidx += 1
+            elif on in new_lines[nidx:]:
+                rows.append(('add', nidx + 1, nn)); nidx += 1
+            else:
+                rows.append(('del', oidx + 1, on))
+                rows.append(('add', nidx + 1, nn))
+                oidx += 1; nidx += 1
+    return rows
+
+
+# ===========================================================================
+# Flash messages
+# ===========================================================================
 FLASH_MESSAGES = {
     "saved":         ("ok",   "Payload saved."),
     "deleted":       ("ok",   "Payload deleted."),
@@ -1227,6 +1659,13 @@ FLASH_MESSAGES = {
     "logs_cleared":  ("ok",   "Audit log cleared."),
     "setup_done":    ("ok",   "Setup complete. Sign in to continue."),
     "restored":      ("ok",   "Previous version restored."),
+    "pinned":        ("ok",   "Pinned."),
+    "unpinned":      ("ok",   "Unpinned."),
+    "pw_changed":    ("ok",   "Password changed. Sign in again."),
+    "token_rotated": ("ok",   "New API token generated."),
+    "token_cleared": ("ok",   "API token cleared."),
+    "factory_reset": ("ok",   "Factory reset complete. Set up the device again."),
+    "bulk_done":     ("ok",   "Bulk action completed."),
     "bad_name":      ("err",  "Invalid filename. Use A-Z, 0-9, _, - and end in .dd"),
     "too_big":       ("err",  "Payload too large."),
     "not_found":     ("err",  "Payload not found."),
@@ -1235,6 +1674,7 @@ FLASH_MESSAGES = {
     "no_backup":     ("err",  "No backup available for this payload."),
     "weak_pw":       ("err",  "Password must be at least 8 characters."),
     "pw_mismatch":   ("err",  "Passwords do not match."),
+    "wrong_pw":      ("err",  "Current password is incorrect."),
 }
 
 
@@ -1245,11 +1685,12 @@ def get_flash(request):
     return None
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Snippet library
-# ---------------------------------------------------------------------------
+# ===========================================================================
 SNIPPETS = [
     ("Comment",          "REM This is a comment"),
+    ("Tags header",      "REM TAGS: starter, demo"),
     ("Delay (ms)",       "DELAY 500"),
     ("Default delay",    "DEFAULT_DELAY 100"),
     ("Type string",      "STRING Hello, world!"),
@@ -1270,9 +1711,9 @@ SNIPPETS = [
 ]
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # System facts
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _storage_usage():
     try:
         st = os.statvfs("/")
@@ -1283,6 +1724,30 @@ def _storage_usage():
         return total, used, free
     except Exception:
         return None, None, None
+
+
+def _wifi_facts():
+    info = {"ap_mac": "?", "channel": "?", "ap_ssid": "?"}
+    try:
+        m = wifi.radio.mac_address_ap
+        info["ap_mac"] = ":".join("%02X" % b for b in m)
+    except Exception:
+        pass
+    for attr in ("ap_channel", "channel"):
+        try:
+            v = getattr(wifi.radio, attr, None)
+            if v is not None:
+                info["channel"] = str(v)
+                break
+        except Exception:
+            pass
+    try:
+        ai = wifi.radio.ap_info
+        if ai and getattr(ai, "ssid", None):
+            info["ap_ssid"] = ai.ssid
+    except Exception:
+        pass
+    return info
 
 
 def _system_facts():
@@ -1309,9 +1774,13 @@ def _system_facts():
     except Exception:
         stations = None
     total_b, used_b, free_b = _storage_usage()
+    wifi_info = _wifi_facts()
     return {
         "board": getattr(board, 'board_id', '?'),
         "ap_ip": ap_ip,
+        "ap_mac": wifi_info["ap_mac"],
+        "ap_channel": wifi_info["channel"],
+        "ap_ssid": wifi_info["ap_ssid"],
         "uptime_s": int(time.monotonic() - BOOT_TIME),
         "uptime": format_uptime(time.monotonic() - BOOT_TIME),
         "free_mem": free,
@@ -1329,9 +1798,9 @@ def _system_facts():
     }
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Page renderers
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def render_setup(flash=None, prefill_user=""):
     body = (
         '<div class="card"><h1>%s First-time setup</h1>'
@@ -1354,58 +1823,94 @@ def render_setup(flash=None, prefill_user=""):
         '<div class="row">'
         '<button class="btn primary" type="submit">%s Save and lock down</button>'
         '</div></form></div>'
-    ) % (icon("lock", "ico ico-lg"), CSRF_TOKEN, html_escape(prefill_user),
-         icon("lock"))
+    ) % (icon("lock", "ico ico-lg"), CSRF_TOKEN,
+         html_escape(prefill_user), icon("lock"))
     return layout("Setup", body, active="home", flash=flash)
 
 
-def render_home(flash=None):
-    payloads = list_payloads()
+def render_home(flash=None, tag_filter=None):
+    detailed = list_payloads_detailed()
+    if tag_filter:
+        detailed = [r for r in detailed if tag_filter in r[4]]
     facts = _system_facts()
-    if not payloads:
+    if not detailed and not tag_filter:
         body = (
             '<div class="card"><div class="empty">'
             '%s'
             '<h1>No payloads yet</h1>'
-            '<p>Create your first DuckyScript or upload a <span class="kbd">.dd</span> file to get started.</p>'
+            '<p>Pick a starter template or upload a <span class="kbd">.dd</span> file.</p>'
             '<div class="row" style="justify-content:center;margin-top:14px">'
-            '<a class="btn primary" href="/new">%s New script</a>'
+            '<a class="btn primary" href="/templates">%s Browse templates</a>'
+            '<a class="btn" href="/new">%s New script</a>'
             '<a class="btn" href="/upload">%s Upload</a>'
-            '<a class="btn ghost" href="/snippets">%s Browse snippets</a>'
             '</div></div></div>'
-        ) % (icon("snippet", "ico ico-lg"), icon("plus"),
-             icon("upload"), icon("snippet"))
+        ) % (icon("snippet", "ico ico-xl"),
+             icon("template"), icon("plus"), icon("upload"))
         return layout("Payloads", body, active="home", flash=flash)
 
-    # Sort by most recently modified for the hero "recent" section
-    by_recent = sorted(payloads, key=lambda x: x[2], reverse=True)[:3]
+    # Gather every tag across visible payloads for filter chips
+    all_tags = []
+    for _, _, _, _, ts in detailed:
+        for t in ts:
+            if t not in all_tags:
+                all_tags.append(t)
 
     rows = []
-    for name, size, _ in payloads:
+    for name, size, mtime, pinned, tags in detailed:
         safe = html_escape(name)
+        tag_html = ''
+        if tags:
+            tag_html = '<div class="tags-row">' + ''.join(
+                '<a class="chip" href="/?tag=%s">%s%s</a>' %
+                (html_escape(t), icon("tag"), html_escape(t)) for t in tags
+            ) + '</div>'
+        star_icon = icon("star")
+        star_cls = "active" if pinned else ""
         rows.append(
-            '<tr>'
-            '<td><strong>%s</strong></td>'
+            '<tr%s data-name="%s" data-size="%d" data-mtime="%d">'
+            '<td><input type="checkbox" class="checkbox row-check" value="%s"></td>'
+            '<td>'
+            '<form method="post" action="/pin/%s" style="display:inline;margin:0">'
+            '%s<button class="icon-btn %s" type="submit" '
+            'style="width:28px;height:28px" title="%s">%s</button></form>'
+            '</td>'
+            '<td><strong>%s</strong>%s</td>'
             '<td class="hide-sm muted">%s</td>'
             '<td><div class="actions">'
-            '<a class="btn small" href="/edit/%s" title="Edit">%s Edit</a>'
-            '<a class="btn small ghost" href="/preview/%s" title="Preview">%s</a>'
-            '<a class="btn small ghost" href="/download/%s" title="Download">%s</a>'
-            '<form method="post" action="/duplicate/%s" style="display:inline">'
-            '%s<button class="btn small ghost" type="submit" title="Clone">%s</button></form>'
-            '<form method="post" action="/run/%s" style="display:inline">'
-            '%s<button class="btn small warn" type="submit" title="Run" '
+            '<a class="btn small" href="/edit/%s">%s Edit</a>'
+            '<div class="dropdown"><button class="btn small ghost" type="button">%s</button>'
+            '<div class="dropdown-menu">'
+            '<a href="/preview/%s">%s Preview</a>'
+            '<a href="/download/%s">%s Download</a>'
+            '<a href="/diff/%s">%s Diff vs backup</a>'
+            '<a href="/rename/%s">%s Rename</a>'
+            '<a href="/cli/%s">%s CLI examples</a>'
+            '<form method="post" action="/duplicate/%s" style="display:block;margin:0">'
+            '%s<button type="submit">%s Duplicate</button></form>'
+            '</div></div>'
+            '<form method="post" action="/run/%s" style="display:inline;margin:0">'
+            '%s<button class="btn small warn" type="submit" '
             'onclick="return confirm(\'Run %s? This will inject keystrokes.\')">'
             '%s</button></form>'
-            '<form method="post" action="/delete/%s" style="display:inline">'
-            '%s<button class="btn small danger" type="submit" title="Delete" '
+            '<form method="post" action="/delete/%s" style="display:inline;margin:0">'
+            '%s<button class="btn small danger" type="submit" '
             'onclick="return confirm(\'Delete %s permanently?\')">%s</button></form>'
             '</div></td>'
             '</tr>'
-            % (safe, format_size(size),
+            % (' class="pinned"' if pinned else '',
+               safe, size, mtime,
+               safe,
+               safe, csrf_field(), star_cls,
+               "Unpin" if pinned else "Pin", star_icon,
+               safe, tag_html,
+               format_size(size),
                safe, icon("edit"),
+               icon("more"),
                safe, icon("preview"),
                safe, icon("download"),
+               safe, icon("diff"),
+               safe, icon("rename"),
+               safe, icon("send"),
                safe, csrf_field(), icon("clone"),
                safe, csrf_field(), safe, icon("play"),
                safe, csrf_field(), safe, icon("trash"))
@@ -1415,19 +1920,6 @@ def render_home(flash=None):
     if facts["fs_total"]:
         pct = int(100 * facts["fs_used"] / facts["fs_total"])
         storage_pct = "%d%% full" % pct
-
-    recent_html = ""
-    if by_recent:
-        items = ''.join(
-            '<a class="btn small ghost" href="/edit/%s">%s %s</a>'
-            % (html_escape(n), icon("edit"), html_escape(n))
-            for n, _, _ in by_recent
-        )
-        recent_html = (
-            '<div class="card"><div class="row"><h3>Recently edited</h3>'
-            '<div class="spacer"></div></div>'
-            '<div class="row">%s</div></div>'
-        ) % items
 
     hero = (
         '<div class="hero">'
@@ -1443,42 +1935,95 @@ def render_home(flash=None):
         icon("audit"), storage_pct or format_size(facts["fs_free"]),
     )
 
+    tag_filter_bar = ""
+    if all_tags or tag_filter:
+        chips = ''
+        if tag_filter:
+            chips += '<a class="chip active" href="/">%s clear filter</a>' % icon("close")
+        for t in all_tags:
+            cls = " active" if t == tag_filter else ""
+            chips += '<a class="chip%s" href="/?tag=%s">%s%s</a>' % (
+                cls, html_escape(t), icon("tag"), html_escape(t))
+        tag_filter_bar = ('<div class="card" style="padding:12px 14px"><div class="row">'
+                          '<span class="muted" style="font-size:12px">'
+                          '%s Tags</span>%s</div></div>') % (icon("tag"), chips)
+
     body = (
-        '<div class="card">'
         '%s'
+        '<div class="bulk-bar" id="bulkBar">'
+        '<span><strong id="selN">0</strong> selected</span>'
+        '<div class="spacer"></div>'
+        '<form method="post" action="/bulk-delete" id="bulkForm">'
+        '%s<input type="hidden" name="names" id="bulkNames">'
+        '<button class="btn small danger" type="submit" '
+        'onclick="return confirm(\'Delete all selected payloads?\')">%s Delete selected</button>'
+        '</form>'
+        '<button class="btn small ghost" type="button" id="bulkClear">Clear</button>'
+        '</div>'
+        '<div class="card">'
         '<div class="row"><h1>Payloads</h1>'
         '<span class="badge">%d</span><div class="spacer"></div>'
         '<a class="btn primary" href="/new">%s New</a>'
+        '<a class="btn" href="/templates">%s Templates</a>'
         '<a class="btn" href="/upload">%s Upload</a>'
         '<a class="btn ghost" href="/search">%s Search</a>'
         '<form method="post" action="/wipe" style="display:inline">'
         '%s<button class="btn danger" type="submit" '
-        'onclick="return confirm(\'WIPE ALL %d payloads? This cannot be undone.\')'
+        'onclick="return confirm(\'WIPE ALL payloads? This cannot be undone.\')'
         '&amp;&amp;confirm(\'Are you absolutely sure?\')">'
         '%s Wipe all</button></form>'
         '</div>'
+        '%s'
         '<div class="field" style="margin-top:14px">'
-        '<input id="filter" class="input" placeholder="Filter payloads...">'
+        '<input id="filter" class="input" placeholder="Filter by name or tag...">'
         '</div>'
-        '<table><thead><tr><th>Name</th>'
-        '<th class="hide-sm">Size</th>'
+        '<table id="ptable"><thead><tr>'
+        '<th style="width:30px"><input type="checkbox" class="checkbox" id="selAll"></th>'
+        '<th style="width:30px"></th>'
+        '<th class="sortable" data-sort="name">Name</th>'
+        '<th class="sortable hide-sm" data-sort="size">Size</th>'
         '<th style="text-align:right">Actions</th></tr></thead>'
         '<tbody id="rows">%s</tbody></table></div>'
-        '%s'
         '<script>'
-        'var f=document.getElementById("filter"),'
+        'var bf=document.getElementById("filter"),'
         'rs=document.querySelectorAll("#rows tr");'
-        'f.addEventListener("input",function(){'
-        'var q=f.value.toLowerCase();'
-        'for(var i=0;i<rs.length;i++){'
-        'rs[i].style.display=rs[i].innerText.toLowerCase().indexOf(q)>-1?"":"none"'
-        '}});'
+        'bf.addEventListener("input",function(){'
+        'var q=bf.value.toLowerCase();'
+        'rs.forEach(function(r){r.style.display=r.innerText.toLowerCase().indexOf(q)>-1?"":"none"})});'
+        # Sort
+        'var sortDir={};'
+        'document.querySelectorAll("th.sortable").forEach(function(th){'
+        'th.addEventListener("click",function(){'
+        'var key=th.dataset.sort,dir=sortDir[key]==="asc"?"desc":"asc";sortDir={};sortDir[key]=dir;'
+        'document.querySelectorAll("th.sortable").forEach(function(t){t.classList.remove("asc","desc")});'
+        'th.classList.add(dir);'
+        'var tbody=document.getElementById("rows");'
+        'var arr=Array.from(tbody.children);'
+        'arr.sort(function(a,b){'
+        'var av=key==="size"?+a.dataset.size:a.dataset.name.toLowerCase();'
+        'var bv=key==="size"?+b.dataset.size:b.dataset.name.toLowerCase();'
+        'if(av<bv)return dir==="asc"?-1:1;if(av>bv)return dir==="asc"?1:-1;return 0});'
+        'arr.forEach(function(r){tbody.appendChild(r)});'
+        '})});'
+        # Bulk select
+        'var bb=document.getElementById("bulkBar"),sa=document.getElementById("selAll"),'
+        'sN=document.getElementById("selN"),bn=document.getElementById("bulkNames"),'
+        'bc=document.getElementById("bulkClear");'
+        'function updateBulk(){'
+        'var sel=Array.from(document.querySelectorAll(".row-check:checked")).map(function(c){return c.value});'
+        'sN.innerText=sel.length;bn.value=sel.join(",");'
+        'bb.classList.toggle("open",sel.length>0)'
+        '}'
+        'document.querySelectorAll(".row-check").forEach(function(c){c.addEventListener("change",updateBulk)});'
+        'sa.addEventListener("change",function(){document.querySelectorAll(".row-check").forEach(function(c){c.checked=sa.checked});updateBulk()});'
+        'bc.addEventListener("click",function(){document.querySelectorAll(".row-check").forEach(function(c){c.checked=false});sa.checked=false;updateBulk()});'
         '</script>'
-    ) % (hero, len(payloads),
-         icon("plus"), icon("upload"), icon("search"),
-         csrf_field(), len(payloads), icon("trash"),
-         ''.join(rows),
-         recent_html)
+    ) % (hero, csrf_field(), icon("trash"),
+         len(detailed),
+         icon("plus"), icon("template"), icon("upload"), icon("search"),
+         csrf_field(), icon("trash"),
+         tag_filter_bar,
+         ''.join(rows))
     return layout("Payloads", body, active="home", flash=flash)
 
 
@@ -1491,8 +2036,9 @@ def render_editor(filename, contents, flash=None, warnings=None):
             '<form method="post" action="/restore/%s" style="display:inline">'
             '%s<button class="btn ghost" type="submit" '
             'onclick="return confirm(\'Restore the previous version? Current contents will be backed up.\')">'
-            '%s Restore previous</button></form>'
-        ) % (safe, csrf_field(), icon("back"))
+            '%s Restore previous</button></form> '
+            '<a class="btn ghost" href="/diff/%s">%s View diff</a>'
+        ) % (safe, csrf_field(), icon("back"), safe, icon("diff"))
     snip_buttons = ''.join(
         '<button type="button" class="snip" data-snip="%s">%s</button>'
         % (html_escape(code).replace('\n', '\\n'), html_escape(label))
@@ -1504,23 +2050,49 @@ def render_editor(filename, contents, flash=None, warnings=None):
         warn_html = ('<div class="alert warn"><strong>%s Lint warnings</strong>'
                      '<ul class="warn-list">%s</ul></div>') % (
             icon("warn"), items)
+    # Find & replace modal (inline in editor only)
+    find_modal = (
+        '<div class="modal-back" id="frModal">'
+        '<div class="modal" role="dialog" aria-modal="true">'
+        '<div class="row"><h2>%s Find &amp; replace</h2><div class="spacer"></div>'
+        '<button class="icon-btn" data-close-modal title="Close">%s</button></div>'
+        '<div class="field"><label>Find</label>'
+        '<input class="input" id="frFind" autocomplete="off"></div>'
+        '<div class="field"><label>Replace with</label>'
+        '<input class="input" id="frRep" autocomplete="off"></div>'
+        '<div class="row">'
+        '<button class="btn" type="button" id="frNext">Find next</button>'
+        '<button class="btn" type="button" id="frReplace">Replace</button>'
+        '<button class="btn primary" type="button" id="frAll">Replace all</button>'
+        '<span class="spacer"></span>'
+        '<label class="row" style="gap:6px;margin:0;font-size:13px">'
+        '<input type="checkbox" id="frCase"> Case-sensitive</label>'
+        '</div>'
+        '</div></div>'
+    ) % (icon("find", "ico ico-lg"), icon("close"))
     body = (
         '<div class="card"><div class="row">'
         '<h1>%s Editing %s</h1><div class="spacer"></div>'
         '<a class="btn" href="/preview/%s">%s Preview</a>'
+        '<a class="btn ghost" href="/cli/%s">%s CLI</a>'
         '<a class="btn" href="/">%s Back</a></div>'
         '%s'
         '<form method="post" action="/write/%s" id="ed">'
         '%s'
         '<div class="field">'
         '<label>Script <span class="shortcut">'
-        '<span class="kbd">Ctrl</span>+<span class="kbd">S</span> to save</span></label>'
-        '<textarea name="scriptData" id="ta" data-name="%s">%s</textarea>'
-        '<p class="muted" id="stats" style="margin:6px 0 0 0;font-size:12px">'
-        'Max %s. Tip: click a snippet below to insert.</p>'
+        '<span class="kbd">Ctrl</span>+<span class="kbd">S</span> save '
+        '&middot; <span class="kbd">Ctrl</span>+<span class="kbd">F</span> find</span></label>'
+        '<div class="editor-wrap">'
+        '<pre class="line-nums" id="lns" aria-hidden="true">1</pre>'
+        '<textarea name="scriptData" id="ta" data-name="%s" spellcheck="false">%s</textarea>'
         '</div>'
-        '<div class="row">'
+        '<p class="muted" id="stats" style="margin:6px 0 0 0;font-size:12px">'
+        'Max %s. Tip: click a snippet below to insert; press <span class="kbd">?</span> for shortcuts.</p>'
+        '</div>'
+        '<div class="sticky-bar">'
         '<button class="btn primary" type="submit">%s Save</button>'
+        '<button class="btn" type="button" id="frBtn">%s Find</button>'
         '<a class="btn" href="/download/%s">%s Download</a>'
         '<a class="btn" href="/rename/%s">%s Rename</a>'
         '%s'
@@ -1529,14 +2101,18 @@ def render_editor(filename, contents, flash=None, warnings=None):
         '</div></form></div>'
         '<div class="card"><h3>%s Snippets</h3>'
         '<div class="snippets">%s</div></div>'
+        '%s'
         '<script>'
         'var ta=document.getElementById("ta"),st=document.getElementById("stats"),'
-        'rb=document.getElementById("restoreBtn"),'
+        'rb=document.getElementById("restoreBtn"),lns=document.getElementById("lns"),'
         'dk="pd:draft:"+ta.dataset.name;'
-        'function upd(){var l=ta.value.split("\\n").length,b=ta.value.length;'
-        'st.innerText=l+" lines \\u00B7 "+b+" bytes";'
+        'function upd(){var lc=ta.value.split("\\n").length,b=ta.value.length;'
+        'st.innerText=lc+" lines \\u00B7 "+b+" bytes";'
+        'var s="";for(var i=1;i<=lc;i++)s+=i+"\\n";lns.textContent=s;'
         'try{localStorage.setItem(dk,ta.value)}catch(e){}}'
-        'ta.addEventListener("input",upd);upd();'
+        'ta.addEventListener("input",upd);'
+        'ta.addEventListener("scroll",function(){lns.scrollTop=ta.scrollTop});'
+        'upd();'
         'try{var d=localStorage.getItem(dk);'
         'if(d&&d!==ta.value){rb.style.display="";'
         'rb.addEventListener("click",function(){ta.value=d;upd();rb.style.display="none"})}}catch(e){}'
@@ -1547,24 +2123,54 @@ def render_editor(filename, contents, flash=None, warnings=None):
         'ta.value=ta.value.slice(0,p)+s+"\\n"+ta.value.slice(p);'
         'ta.focus();upd();'
         '})});'
+        # Ctrl+S / Ctrl+F
         'document.addEventListener("keydown",function(e){'
-        'var tag=(e.target&&e.target.tagName)||"";'
-        'if((e.ctrlKey||e.metaKey)&&e.key==="s"){'
-        'e.preventDefault();document.getElementById("ed").submit()}});'
+        'if((e.ctrlKey||e.metaKey)&&e.key==="s"){e.preventDefault();document.getElementById("ed").submit()}'
+        'if((e.ctrlKey||e.metaKey)&&(e.key==="f"||e.key==="h")){e.preventDefault();openFR()}'
+        '});'
         'document.getElementById("ed").addEventListener("submit",function(){'
         'try{localStorage.removeItem(dk)}catch(e){}});'
+        # Find & replace
+        'var fr=document.getElementById("frModal"),fb=document.getElementById("frBtn"),'
+        'ff=document.getElementById("frFind"),fp=document.getElementById("frRep"),'
+        'fc=document.getElementById("frCase");'
+        'function openFR(){fr.classList.add("open");setTimeout(function(){ff.focus()},50)}'
+        'fb.addEventListener("click",openFR);'
+        'function findNext(){var q=ff.value;if(!q)return;'
+        'var hay=fc.checked?ta.value:ta.value.toLowerCase();'
+        'var needle=fc.checked?q:q.toLowerCase();'
+        'var from=ta.selectionEnd||0;var i=hay.indexOf(needle,from);'
+        'if(i<0)i=hay.indexOf(needle,0);'
+        'if(i>=0){ta.focus();ta.setSelectionRange(i,i+q.length)}}'
+        'document.getElementById("frNext").addEventListener("click",findNext);'
+        'document.getElementById("frReplace").addEventListener("click",function(){'
+        'var sel=ta.value.substring(ta.selectionStart,ta.selectionEnd);'
+        'var needle=ff.value;if(!needle)return;'
+        'var match=fc.checked?sel===needle:sel.toLowerCase()===needle.toLowerCase();'
+        'if(match){var s=ta.selectionStart;ta.setRangeText(fp.value,s,ta.selectionEnd,"end");upd()}'
+        'findNext()});'
+        'document.getElementById("frAll").addEventListener("click",function(){'
+        'var needle=ff.value;if(!needle)return;'
+        'if(fc.checked){ta.value=ta.value.split(needle).join(fp.value)}'
+        'else{var re=new RegExp(needle.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\\\$&"),"gi");'
+        'ta.value=ta.value.replace(re,fp.value)}'
+        'upd()});'
         '</script>'
     ) % (icon("edit", "ico ico-lg"), safe,
          safe, icon("preview"),
+         safe, icon("send"),
          icon("back"),
          warn_html,
          safe, csrf_field(),
          safe, html_escape(contents),
          format_size(MAX_PAYLOAD_BYTES),
-         icon("ok"), safe, icon("download"), safe, icon("rename"),
+         icon("save"), icon("find"),
+         safe, icon("download"),
+         safe, icon("rename"),
          restore_html,
          icon("back"),
-         icon("snippet"), snip_buttons)
+         icon("snippet"), snip_buttons,
+         find_modal)
     return layout("Edit " + filename, body, active="home", flash=flash)
 
 
@@ -1582,11 +2188,12 @@ def render_new(flash=None, prefill_name="", prefill_data=""):
         '<div class="row">'
         '<button class="btn primary" type="submit">%s Create</button>'
         '<a class="btn" href="/">%s Cancel</a>'
-        '<a class="btn ghost" href="/snippets">%s Browse snippets</a>'
+        '<a class="btn ghost" href="/templates">%s Templates</a>'
+        '<a class="btn ghost" href="/snippets">%s Snippets</a>'
         '</div></form></div>'
     ) % (icon("plus", "ico ico-lg"), csrf_field(),
          html_escape(prefill_name), html_escape(prefill_data),
-         icon("plus"), icon("back"), icon("snippet"))
+         icon("plus"), icon("back"), icon("template"), icon("snippet"))
     return layout("New script", body, active="new", flash=flash)
 
 
@@ -1651,11 +2258,11 @@ def render_snippets(flash=None):
         items += (
             '<div class="card"><div class="row">'
             '<h2>%s</h2><div class="spacer"></div>'
-            '<button class="btn small" onclick="copyText(this)">Copy</button>'
+            '<button class="btn small" onclick="copyText(this)">%s Copy</button>'
             '</div>'
             '<pre class="code-preview" style="margin:8px 0 0">'
             '<code>%s</code></pre></div>'
-        ) % (html_escape(label), html_escape(code))
+        ) % (html_escape(label), icon("copy"), html_escape(code))
     body = (
         '<div class="card"><h1>%s DuckyScript snippets</h1>'
         '<p class="muted">Common building blocks. Click <em>Copy</em>, or '
@@ -1666,8 +2273,36 @@ def render_snippets(flash=None):
         'if(navigator.clipboard){navigator.clipboard.writeText(c);'
         'b.innerText="Copied"}else{b.innerText="Select manually"}}'
         '</script>'
-    ) % (icon("snippet", "ico ico-lg"), items)
+    ) % (icon("wand", "ico ico-lg"), items)
     return layout("Snippets", body, active="snippets", flash=flash)
+
+
+def render_templates(flash=None):
+    cards = ''
+    for t in TEMPLATES:
+        cards += (
+            '<a class="template-card" href="/new?template=%s">'
+            '<div class="ico-host">%s</div>'
+            '<div class="body">'
+            '<h2>%s</h2>'
+            '<p>%s</p>'
+            '<div style="margin-top:6px">%s</div>'
+            '</div></a>'
+        ) % (
+            html_escape(t["key"]),
+            icon("template", "ico ico-lg"),
+            html_escape(t["name"]),
+            html_escape(t["desc"]),
+            ''.join('<span class="chip">%s%s</span>' % (icon("tag"), html_escape(tag.strip()))
+                    for tag in t["tags"].split(",") if tag.strip())
+        )
+    body = (
+        '<div class="card"><h1>%s Templates</h1>'
+        '<p class="muted">Pre-built starters. Pick one to open the editor pre-filled — '
+        'edit, save, run.</p></div>'
+        '<div>%s</div>'
+    ) % (icon("template", "ico ico-lg"), cards)
+    return layout("Templates", body, active="templates", flash=flash)
 
 
 def render_preview(filename, contents):
@@ -1699,24 +2334,93 @@ def render_rename(filename, flash=None):
     return layout("Rename " + filename, body, active="home", flash=flash)
 
 
+def render_diff(filename, old, new, flash=None):
+    safe = html_escape(filename)
+    rows = render_diff_lines(old, new)
+    if not rows:
+        body_html = '<div class="empty"><p>No differences.</p></div>'
+    else:
+        body_lines = []
+        for kind, ln, txt in rows:
+            sign = "+" if kind == "add" else ("-" if kind == "del" else " ")
+            body_lines.append(
+                '<div class="diff-row %s">'
+                '<div class="gutter">%s %d</div><div>%s</div></div>'
+                % (kind, sign, ln, html_escape(txt))
+            )
+        body_html = '<div class="code-preview" style="white-space:normal">' + ''.join(body_lines) + '</div>'
+    body = (
+        '<div class="card"><div class="row">'
+        '<h1>%s Diff: %s</h1><div class="spacer"></div>'
+        '<a class="btn" href="/edit/%s">%s Edit</a>'
+        '<a class="btn" href="/">%s Back</a></div>'
+        '<p class="muted">Comparing the saved version with the backup '
+        '(<span class="kbd">%s.bak</span>).</p>%s</div>'
+    ) % (icon("diff", "ico ico-lg"), safe, safe,
+         icon("edit"), icon("back"), safe, body_html)
+    return layout("Diff " + filename, body, active="home", flash=flash)
+
+
+def render_cli(filename, request_host="192.168.4.1"):
+    safe = html_escape(filename)
+    user = WEB_USERNAME or "USER"
+    base = "http://%s" % request_host
+    cmd_list = (
+        "# List payloads\n"
+        "curl -u %s:PASSWORD %s/api/payloads\n\n"
+        "# Run this payload via the friendly route (requires CSRF; easier to use the API)\n"
+        "curl -u %s:PASSWORD %s/run/%s\n\n"
+        "# Download this payload\n"
+        "curl -u %s:PASSWORD %s/download/%s -o %s\n\n"
+        "# Quick health probe (no auth)\n"
+        "curl %s/health\n"
+    ) % (user, base, user, base, filename,
+         user, base, filename, filename, base)
+    api_token_block = (
+        "# With API token (preferred for automation)\n"
+        "curl -H 'Authorization: Bearer YOUR_TOKEN' %s/api/system\n"
+        "curl -X GET %s/api/run/1?token=YOUR_TOKEN\n"
+    ) % (base, base)
+    body = (
+        '<div class="card"><div class="row">'
+        '<h1>%s CLI examples: %s</h1><div class="spacer"></div>'
+        '<a class="btn" href="/edit/%s">%s Edit</a>'
+        '<a class="btn" href="/">%s Back</a></div>'
+        '<p class="muted">Replace <span class="kbd">PASSWORD</span> with your web password '
+        'and <span class="kbd">YOUR_TOKEN</span> with the API token from Settings.</p>'
+        '<h3>Web-auth examples</h3>'
+        '<pre class="code-preview"><code>%s</code></pre>'
+        '<h3>API-token examples</h3>'
+        '<pre class="code-preview"><code>%s</code></pre>'
+        '<button class="btn" type="button" onclick="copy(this)">%s Copy all</button>'
+        '</div>'
+        '<script>'
+        'function copy(b){var t="";document.querySelectorAll("code").forEach(function(c){t+=c.innerText+"\\n"});'
+        'if(navigator.clipboard){navigator.clipboard.writeText(t);b.innerText="Copied"}}'
+        '</script>'
+    ) % (icon("send", "ico ico-lg"), safe, safe,
+         icon("edit"), icon("back"),
+         html_escape(cmd_list), html_escape(api_token_block), icon("copy"))
+    return layout("CLI " + filename, body, active="home")
+
+
 def render_search(query="", results=None, flash=None):
     results = results or []
     res_html = ""
     if query and not results:
         res_html = ('<div class="card empty">%s'
                     '<p>No matches for <strong>%s</strong>.</p></div>'
-                    ) % (icon("search", "ico ico-lg"), html_escape(query))
+                    ) % (icon("search", "ico ico-xl"), html_escape(query))
     elif results:
         rows = ''
         for name, lineno, line in results:
-            # Highlight the match
             ql = query.lower()
             li = line.lower()
             idx = li.find(ql)
             if idx >= 0:
                 marked = (html_escape(line[:idx])
-                          + '<mark>' + html_escape(line[idx:idx+len(query)]) + '</mark>'
-                          + html_escape(line[idx+len(query):]))
+                          + '<mark>' + html_escape(line[idx:idx + len(query)]) + '</mark>'
+                          + html_escape(line[idx + len(query):]))
             else:
                 marked = html_escape(line)
             rows += (
@@ -1727,16 +2431,17 @@ def render_search(query="", results=None, flash=None):
             ) % (html_escape(name), html_escape(name), lineno, marked)
         res_html = '<div class="card"><h2>%d match%s</h2>%s</div>' % (
             len(results), '' if len(results) == 1 else 'es', rows)
-
     body = (
         '<div class="card"><h1>%s Search payloads</h1>'
         '<form method="get" action="/search">'
         '<div class="row">'
-        '<input id="q" class="input" name="q" placeholder="Search inside payload text..." value="%s" autofocus>'
+        '<input id="q" class="input" name="q" placeholder="Search inside payload text..." '
+        'value="%s" autofocus>'
         '<button class="btn primary" type="submit">%s Search</button>'
         '</div></form>'
         '<p class="muted" style="margin-top:8px;font-size:12px">'
-        'Plain substring search; case-insensitive. First 100 matches.</p>'
+        'Plain substring search; case-insensitive. First 100 matches. '
+        'Press <span class="kbd">/</span> to focus the box.</p>'
         '</div>%s'
         '<script>'
         'document.addEventListener("keydown",function(e){'
@@ -1774,7 +2479,10 @@ def render_system(flash=None):
     cpu = "?" if f["cpu_temp_c"] is None else ("%.1f \xb0C" % f["cpu_temp_c"])
     stats = [
         ("Board", f["board"]),
+        ("AP SSID", f["ap_ssid"]),
         ("Access Point IP", f["ap_ip"]),
+        ("Access Point MAC", f["ap_mac"]),
+        ("Channel", f["ap_channel"]),
         ("Uptime", f["uptime"]),
         ("Payloads", str(f["payload_count"])),
         ("Connected stations",
@@ -1805,26 +2513,119 @@ def render_system(flash=None):
              format_size(f["fs_used"]), format_size(f["fs_total"]),
              format_size(f["fs_free"]))
     body = (
-        '<div class="card"><h1>%s System</h1>'
+        '<div class="card"><div class="row">'
+        '<h1>%s System</h1><div class="spacer"></div>'
+        '<label class="row" style="gap:6px;margin:0;font-size:13px;color:var(--muted)">'
+        '<input type="checkbox" id="autoR"> Auto-refresh</label>'
+        '</div>'
         '<p class="muted">Live status of the device.</p>'
         '<div class="grid">%s</div>'
         '<div class="row" style="margin-top:16px">'
-        '<a class="btn" href="/system">Refresh</a>'
-        '<a class="btn ghost" href="/api/system">JSON</a>'
-        '<a class="btn ghost" href="/health">Health</a>'
+        '<a class="btn" href="/system">%s Refresh</a>'
+        '<a class="btn ghost" href="/api/system">%s JSON</a>'
+        '<a class="btn ghost" href="/health">%s Health</a>'
+        '<a class="btn ghost" href="/settings">%s Settings</a>'
         '<form method="post" action="/system/reboot" style="display:inline">'
         '%s<button class="btn danger" type="submit" '
         'onclick="return confirm(\'Reboot the Pico now?\')">%s Reboot</button>'
         '</form></div></div>'
         '%s'
-    ) % (icon("system", "ico ico-lg"), cards, csrf_field(),
-         icon("reboot"), bar_html)
+        '<script>'
+        'var ar=document.getElementById("autoR"),iv;'
+        'try{ar.checked=localStorage.getItem("pdAuto")==="1"}catch(e){}'
+        'function tick(){location.reload()}'
+        'function setup(){if(iv)clearInterval(iv);if(ar.checked)iv=setInterval(tick,5000)}'
+        'ar.addEventListener("change",function(){try{localStorage.setItem("pdAuto",ar.checked?"1":"0")}catch(e){};setup()});'
+        'setup();'
+        '</script>'
+    ) % (icon("system", "ico ico-lg"), cards,
+         icon("refresh"), icon("info"), icon("ok"), icon("settings"),
+         csrf_field(), icon("reboot"), bar_html)
     return layout("System", body, active="system", flash=flash)
 
 
-# ---------------------------------------------------------------------------
+def render_settings(flash=None):
+    f = _system_facts()
+    body = (
+        '<div class="card"><h1>%s Settings</h1>'
+        '<p class="muted">Change credentials, manage the API token, '
+        'tune the look, or wipe everything.</p></div>'
+        # Appearance
+        '<div class="card"><h2>%s Appearance</h2>'
+        '<div class="row" style="gap:10px;margin-top:10px">'
+        '<span class="muted">Accent</span>'
+        '%s'
+        '</div>'
+        '<p class="muted" style="margin-top:10px;font-size:13px">'
+        'Theme cycles dark → light → OLED via the %s button in the header.</p>'
+        '<script>'
+        '(function(){'
+        'document.querySelectorAll(".accent-swatch").forEach(function(s){'
+        'var cur=document.documentElement.getAttribute("data-accent")||"cyan";'
+        'if(s.dataset.c===cur)s.classList.add("active");'
+        's.addEventListener("click",function(){'
+        'document.querySelectorAll(".accent-swatch").forEach(function(o){o.classList.remove("active")});'
+        's.classList.add("active");'
+        'document.documentElement.setAttribute("data-accent",s.dataset.c);'
+        'try{localStorage.setItem("pdaccent",s.dataset.c)}catch(e){}'
+        '})});'
+        '})();'
+        '</script>'
+        '</div>'
+        # Change password
+        '<div class="card"><h2>%s Change password</h2>'
+        '<form method="post" action="/settings/password">'
+        '%s'
+        '<div class="field"><label>Current password</label>'
+        '<input class="input" type="password" name="current" minlength="8" maxlength="64" required></div>'
+        '<div class="field"><label>New password (min 8 chars)</label>'
+        '<input class="input" type="password" name="new" minlength="8" maxlength="64" required></div>'
+        '<div class="field"><label>Confirm new password</label>'
+        '<input class="input" type="password" name="new2" minlength="8" maxlength="64" required></div>'
+        '<div class="row"><button class="btn primary" type="submit">%s Update password</button></div>'
+        '</form></div>'
+        # API token
+        '<div class="card"><h2>%s API token</h2>'
+        '<p class="muted">Currently: <strong>%s</strong></p>'
+        '<div class="row" style="margin-top:10px">'
+        '<form method="post" action="/settings/rotate-token" style="display:inline">'
+        '%s<button class="btn" type="submit" '
+        'onclick="return confirm(\'Generate a new API token? Existing scripts will break.\')">%s Rotate token</button>'
+        '</form>'
+        '<form method="post" action="/settings/clear-token" style="display:inline">'
+        '%s<button class="btn danger" type="submit" '
+        'onclick="return confirm(\'Disable the API token entirely?\')">%s Clear token</button>'
+        '</form></div></div>'
+        # Factory reset
+        '<div class="card"><h2>%s Danger zone</h2>'
+        '<p class="muted">Factory reset wipes <em>everything</em>: payloads, '
+        'backups, audit log, pins, and credentials. The device returns to '
+        'first-run setup.</p>'
+        '<form method="post" action="/settings/factory-reset" style="margin-top:10px">'
+        '%s'
+        '<div class="field"><label>Type <span class="kbd">RESET</span> to confirm</label>'
+        '<input class="input" name="confirm" required></div>'
+        '<div class="row"><button class="btn danger" type="submit">%s Factory reset</button></div>'
+        '</form></div>'
+    ) % (
+        icon("settings", "ico ico-lg"),
+        icon("wand"),
+        ''.join('<button type="button" class="accent-swatch" data-c="%s" title="%s"></button>' % (c, c)
+                for c in ACCENT_THEMES),
+        icon("sun"),
+        icon("lock"), csrf_field(), icon("ok"),
+        icon("shield"),
+        "set (rotate or clear below)" if f["api_token_set"] else "not set",
+        csrf_field(), icon("refresh"),
+        csrf_field(), icon("trash"),
+        icon("warn"), csrf_field(), icon("trash"),
+    )
+    return layout("Settings", body, active="settings", flash=flash)
+
+
+# ===========================================================================
 # WSGI app
-# ---------------------------------------------------------------------------
+# ===========================================================================
 web_app = WSGIApp()
 
 
@@ -1850,7 +2651,7 @@ def _csrf_gate(form):
     return None
 
 
-# ---- Setup wizard ----
+# ---- Setup ----
 @web_app.route("/setup", methods=['GET', 'POST'])
 def setup_route(request):
     if not SETUP_REQUIRED:
@@ -1858,7 +2659,7 @@ def setup_route(request):
     if request.method == 'GET':
         return html_response(render_setup(flash=get_flash(request)))
     try:
-        form = parse_form(request_body(request))
+        form = parse_form_single(request_body(request))
     except ValueError:
         return redirect("/setup", flash="too_big")
     if not csrf_ok(form):
@@ -1869,8 +2670,7 @@ def setup_route(request):
     token = (form.get('api_token') or '').strip()
     if len(user) < 3 or len(user) > 32:
         return html_response(render_setup(
-            flash=("err", "Username must be 3-32 characters."),
-            prefill_user=user))
+            flash=("err", "Username must be 3-32 characters."), prefill_user=user))
     if len(pw) < 8:
         return html_response(render_setup(
             flash=FLASH_MESSAGES["weak_pw"], prefill_user=user))
@@ -1886,14 +2686,12 @@ def setup_route(request):
     except Exception as ex:
         print("setup write failed:", ex)
         return html_response(render_setup(
-            flash=("err", "Could not write credentials. Is the FS read-only?"),
-            prefill_user=user))
-    audit("setup.complete", "user=%s api=%s" %
-          (user, "yes" if token else "no"))
+            flash=("err", "Could not write credentials."), prefill_user=user))
+    audit("setup.complete", "user=%s api=%s" % (user, "yes" if token else "no"))
     return redirect("/", flash="setup_done")
 
 
-# ---- Index / home ----
+# ---- Home ----
 @web_app.route("/")
 def index(request):
     gate = _setup_gate(request, "/")
@@ -1902,7 +2700,8 @@ def index(request):
     auth = _auth_gate(request)
     if auth:
         return auth
-    return html_response(render_home(flash=get_flash(request)))
+    tag = query_get(request, 'tag')
+    return html_response(render_home(flash=get_flash(request), tag_filter=tag))
 
 
 @web_app.route("/ducky")
@@ -1910,7 +2709,7 @@ def ducky_compat(request):
     return index(request)
 
 
-# ---- New ----
+# ---- New (with optional ?template=key) ----
 @web_app.route("/new", methods=['GET', 'POST'])
 def new_script(request):
     gate = _setup_gate(request, "/new")
@@ -1920,9 +2719,19 @@ def new_script(request):
     if auth:
         return auth
     if request.method == 'GET':
-        return html_response(render_new(flash=get_flash(request)))
+        prefill_name = ""
+        prefill_data = ""
+        tmpl_key = query_get(request, 'template')
+        if tmpl_key:
+            t = template_by_key(tmpl_key)
+            if t:
+                prefill_name = t["key"] + ".dd"
+                prefill_data = t["body"]
+        return html_response(render_new(flash=get_flash(request),
+                                        prefill_name=prefill_name,
+                                        prefill_data=prefill_data))
     try:
-        form = parse_form(request_body(request))
+        form = parse_form_single(request_body(request))
     except ValueError:
         return redirect("/new", flash="too_big")
     csrf = _csrf_gate(form)
@@ -1951,7 +2760,7 @@ def new_script(request):
     return redirect("/edit/" + name, flash="saved")
 
 
-# ---- Edit ----
+# ---- Edit / Write / Restore ----
 @web_app.route("/edit/<filename>")
 def edit(request, filename):
     gate = _setup_gate(request, "/edit")
@@ -1968,11 +2777,9 @@ def edit(request, filename):
             contents = f.read()
     except OSError:
         return redirect("/", flash="not_found")
-    return html_response(render_editor(name, contents,
-                                       flash=get_flash(request)))
+    return html_response(render_editor(name, contents, flash=get_flash(request)))
 
 
-# ---- Write ----
 @web_app.route("/write/<filename>", methods=['POST'])
 def write_script(request, filename):
     gate = _setup_gate(request, "/write")
@@ -1985,7 +2792,7 @@ def write_script(request, filename):
     if not name:
         return redirect("/", flash="bad_name")
     try:
-        form = parse_form(request_body(request))
+        form = parse_form_single(request_body(request))
     except ValueError:
         return redirect("/", flash="too_big")
     csrf = _csrf_gate(form)
@@ -2008,7 +2815,6 @@ def write_script(request, filename):
     return redirect("/edit/" + name, flash="saved")
 
 
-# ---- Restore previous (.dd.bak) ----
 @web_app.route("/restore/<filename>", methods=['POST'])
 def restore_route(request, filename):
     gate = _setup_gate(request, "/restore")
@@ -2021,7 +2827,7 @@ def restore_route(request, filename):
     if not name:
         return redirect("/", flash="bad_name")
     try:
-        form = parse_form(request_body(request))
+        form = parse_form_single(request_body(request))
     except ValueError:
         return redirect("/", flash="bad_request")
     csrf = _csrf_gate(form)
@@ -2041,6 +2847,34 @@ def restore_route(request, filename):
     return redirect("/edit/" + name, flash="restored")
 
 
+# ---- Diff ----
+@web_app.route("/diff/<filename>")
+def diff_route(request, filename):
+    gate = _setup_gate(request, "/diff")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    name = safe_filename(filename)
+    if not name or not file_exists(name):
+        return redirect("/", flash="not_found")
+    try:
+        with open(name, "r") as f:
+            new = f.read()
+    except OSError:
+        return redirect("/", flash="not_found")
+    bak = name + ".bak"
+    old = ""
+    if file_exists(bak):
+        try:
+            with open(bak, "r") as f:
+                old = f.read()
+        except OSError:
+            pass
+    return html_response(render_diff(name, old, new))
+
+
 # ---- Delete ----
 @web_app.route("/delete/<filename>", methods=['POST'])
 def delete_route(request, filename):
@@ -2051,7 +2885,7 @@ def delete_route(request, filename):
     if auth:
         return auth
     try:
-        form = parse_form(request_body(request))
+        form = parse_form_single(request_body(request))
     except ValueError:
         return redirect("/", flash="bad_request")
     csrf = _csrf_gate(form)
@@ -2062,11 +2896,48 @@ def delete_route(request, filename):
         return redirect("/", flash="not_found")
     try:
         delete_file_safely(name)
+        pins = read_pins()
+        if name in pins:
+            pins.discard(name); write_pins(pins)
     except Exception as ex:
         print("delete failed:", ex)
         return redirect("/", flash="bad_request")
     audit("payload.delete", name)
     return redirect("/", flash="deleted")
+
+
+# ---- Bulk delete ----
+@web_app.route("/bulk-delete", methods=['POST'])
+def bulk_delete_route(request):
+    gate = _setup_gate(request, "/bulk-delete")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    try:
+        form = parse_form_single(request_body(request))
+    except ValueError:
+        return redirect("/", flash="bad_request")
+    csrf = _csrf_gate(form)
+    if csrf:
+        return csrf
+    raw_names = form.get('names', '')
+    names = [n.strip() for n in raw_names.split(',') if n.strip()]
+    pins = read_pins()
+    removed = 0
+    for n in names:
+        sf = safe_filename(n)
+        if sf and file_exists(sf):
+            try:
+                delete_file_safely(sf)
+                pins.discard(sf)
+                removed += 1
+            except Exception:
+                pass
+    write_pins(pins)
+    audit("payload.bulk_delete", "%d removed" % removed)
+    return redirect("/", flash="bulk_done")
 
 
 # ---- Duplicate ----
@@ -2079,7 +2950,7 @@ def duplicate_route(request, filename):
     if auth:
         return auth
     try:
-        form = parse_form(request_body(request))
+        form = parse_form_single(request_body(request))
     except ValueError:
         return redirect("/", flash="bad_request")
     csrf = _csrf_gate(form)
@@ -2091,7 +2962,8 @@ def duplicate_route(request, filename):
     base = name[:-len(PAYLOAD_EXT)]
     new_name = None
     for i in range(1, 100):
-        candidate = "%s_copy%s" % (base, PAYLOAD_EXT) if i == 1 else "%s_copy%d%s" % (base, i, PAYLOAD_EXT)
+        candidate = "%s_copy%s" % (base, PAYLOAD_EXT) if i == 1 \
+                    else "%s_copy%d%s" % (base, i, PAYLOAD_EXT)
         if not file_exists(candidate) and len(candidate) <= MAX_FILENAME_LEN:
             new_name = candidate
             break
@@ -2123,7 +2995,7 @@ def rename_route(request, filename):
     if request.method == 'GET':
         return html_response(render_rename(name, flash=get_flash(request)))
     try:
-        form = parse_form(request_body(request))
+        form = parse_form_single(request_body(request))
     except ValueError:
         return redirect("/", flash="bad_request")
     csrf = _csrf_gate(form)
@@ -2138,17 +3010,44 @@ def rename_route(request, filename):
         return redirect("/rename/" + name, flash="exists")
     try:
         rename_file_safely(name, new_name)
-        # Move any .bak alongside
         if file_exists(name + ".bak"):
             try:
                 rename_file_safely(name + ".bak", new_name + ".bak")
             except Exception:
                 pass
+        # Move pin if present
+        pins = read_pins()
+        if name in pins:
+            pins.discard(name); pins.add(new_name); write_pins(pins)
     except Exception as ex:
         print("rename failed:", ex)
         return redirect("/", flash="bad_request")
     audit("payload.rename", "%s -> %s" % (name, new_name))
     return redirect("/", flash="renamed")
+
+
+# ---- Pin / unpin ----
+@web_app.route("/pin/<filename>", methods=['POST'])
+def pin_route(request, filename):
+    gate = _setup_gate(request, "/pin")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    try:
+        form = parse_form_single(request_body(request))
+    except ValueError:
+        return redirect("/", flash="bad_request")
+    csrf = _csrf_gate(form)
+    if csrf:
+        return csrf
+    name = safe_filename(filename)
+    if not name or not file_exists(name):
+        return redirect("/", flash="not_found")
+    action = toggle_pin(name)
+    audit("payload.pin", "%s %s" % (name, action))
+    return redirect("/", flash="pinned" if action == "on" else "unpinned")
 
 
 # ---- Download ----
@@ -2172,7 +3071,7 @@ def download(request, filename):
     return text_response(contents, filename=name)
 
 
-# ---- Preview ----
+# ---- Preview / CLI ----
 @web_app.route("/preview/<filename>")
 def preview_route(request, filename):
     gate = _setup_gate(request, "/preview")
@@ -2192,7 +3091,22 @@ def preview_route(request, filename):
     return html_response(render_preview(name, contents))
 
 
-# ---- Upload page ----
+@web_app.route("/cli/<filename>")
+def cli_route(request, filename):
+    gate = _setup_gate(request, "/cli")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    name = safe_filename(filename)
+    if not name or not file_exists(name):
+        return redirect("/", flash="not_found")
+    host_hdr = get_header(request, "Host") or "192.168.4.1"
+    return html_response(render_cli(name, request_host=host_hdr))
+
+
+# ---- Upload / Snippets / Templates / Search / Audit ----
 @web_app.route("/upload")
 def upload_page(request):
     gate = _setup_gate(request, "/upload")
@@ -2204,7 +3118,6 @@ def upload_page(request):
     return html_response(render_upload(flash=get_flash(request)))
 
 
-# ---- Snippets ----
 @web_app.route("/snippets")
 def snippets_page(request):
     gate = _setup_gate(request, "/snippets")
@@ -2216,7 +3129,17 @@ def snippets_page(request):
     return html_response(render_snippets(flash=get_flash(request)))
 
 
-# ---- Search ----
+@web_app.route("/templates")
+def templates_page(request):
+    gate = _setup_gate(request, "/templates")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    return html_response(render_templates(flash=get_flash(request)))
+
+
 @web_app.route("/search")
 def search_page(request):
     gate = _setup_gate(request, "/search")
@@ -2247,7 +3170,6 @@ def search_page(request):
     return html_response(render_search(q, results, flash=get_flash(request)))
 
 
-# ---- Audit ----
 @web_app.route("/audit")
 def audit_page(request):
     gate = _setup_gate(request, "/audit")
@@ -2268,7 +3190,7 @@ def audit_clear(request):
     if auth:
         return auth
     try:
-        form = parse_form(request_body(request))
+        form = parse_form_single(request_body(request))
     except ValueError:
         return redirect("/audit", flash="bad_request")
     csrf = _csrf_gate(form)
@@ -2281,6 +3203,149 @@ def audit_clear(request):
         return redirect("/audit", flash="bad_request")
     audit("audit.clear")
     return redirect("/audit", flash="logs_cleared")
+
+
+# ---- Settings ----
+@web_app.route("/settings")
+def settings_page(request):
+    gate = _setup_gate(request, "/settings")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    return html_response(render_settings(flash=get_flash(request)))
+
+
+@web_app.route("/settings/password", methods=['POST'])
+def settings_password(request):
+    gate = _setup_gate(request, "/settings/password")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    try:
+        form = parse_form_single(request_body(request))
+    except ValueError:
+        return redirect("/settings", flash="bad_request")
+    csrf = _csrf_gate(form)
+    if csrf:
+        return csrf
+    cur = form.get('current', '')
+    new = form.get('new', '')
+    new2 = form.get('new2', '')
+    if not _ct_equals(cur, WEB_PASSWORD):
+        return redirect("/settings", flash="wrong_pw")
+    if len(new) < 8:
+        return redirect("/settings", flash="weak_pw")
+    if new != new2:
+        return redirect("/settings", flash="pw_mismatch")
+    try:
+        apply_credentials(WEB_USERNAME, new, API_TOKEN)
+    except Exception as ex:
+        print("password change failed:", ex)
+        return redirect("/settings", flash="bad_request")
+    audit("auth.pw_changed")
+    # Force re-auth: send 401 with a different realm to drop cached basic auth
+    body = layout("Password changed",
+                  '<div class="card"><h1>%s Password changed</h1>'
+                  '<p class="muted">Sign in again to continue.</p></div>'
+                  % icon("ok", "ico ico-lg"))
+    return ("401 Unauthorized",
+            [("Content-Type", "text/html; charset=utf-8"),
+             ("WWW-Authenticate", 'Basic realm="Pico Ducky - reauth"')],
+            body)
+
+
+@web_app.route("/settings/rotate-token", methods=['POST'])
+def settings_rotate_token(request):
+    gate = _setup_gate(request, "/settings/rotate-token")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    try:
+        form = parse_form_single(request_body(request))
+    except ValueError:
+        return redirect("/settings", flash="bad_request")
+    csrf = _csrf_gate(form)
+    if csrf:
+        return csrf
+    try:
+        new_token = rotate_api_token()
+    except Exception as ex:
+        print("token rotate failed:", ex)
+        return redirect("/settings", flash="bad_request")
+    audit("api.token_rotated")
+    # Show the new token once on a confirmation card
+    body = layout("Token rotated",
+                  '<div class="card"><h1>%s New API token generated</h1>'
+                  '<p class="muted">Copy this now — it will not be shown again.</p>'
+                  '<pre class="code-preview"><code>%s</code></pre>'
+                  '<div class="row" style="margin-top:10px">'
+                  '<a class="btn" href="/settings">%s Back to settings</a>'
+                  '</div></div>' % (icon("shield", "ico ico-lg"),
+                                    html_escape(new_token), icon("back")))
+    return html_response(body)
+
+
+@web_app.route("/settings/clear-token", methods=['POST'])
+def settings_clear_token(request):
+    gate = _setup_gate(request, "/settings/clear-token")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    try:
+        form = parse_form_single(request_body(request))
+    except ValueError:
+        return redirect("/settings", flash="bad_request")
+    csrf = _csrf_gate(form)
+    if csrf:
+        return csrf
+    try:
+        clear_api_token()
+    except Exception as ex:
+        print("token clear failed:", ex)
+        return redirect("/settings", flash="bad_request")
+    audit("api.token_cleared")
+    return redirect("/settings", flash="token_cleared")
+
+
+@web_app.route("/settings/factory-reset", methods=['POST'])
+def settings_factory_reset(request):
+    gate = _setup_gate(request, "/settings/factory-reset")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    try:
+        form = parse_form_single(request_body(request))
+    except ValueError:
+        return redirect("/settings", flash="bad_request")
+    csrf = _csrf_gate(form)
+    if csrf:
+        return csrf
+    if (form.get('confirm') or '').strip() != "RESET":
+        return redirect("/settings", flash="bad_request")
+    try:
+        factory_reset()
+    except Exception as ex:
+        print("factory reset failed:", ex)
+        return redirect("/settings", flash="bad_request")
+    audit("system.factory_reset")
+    # All creds gone — redirect to setup
+    body = layout("Factory reset",
+                  '<div class="card"><h1>%s Factory reset complete</h1>'
+                  '<p class="muted">Every payload, backup, audit entry, pin '
+                  'and credential has been removed.</p>'
+                  '<p><a class="btn primary" href="/setup">%s Start setup</a></p>'
+                  '</div>' % (icon("ok", "ico ico-lg"), icon("lock")))
+    return html_response(body)
 
 
 # ---- System ----
@@ -2304,7 +3369,7 @@ def system_reboot(request):
     if auth:
         return auth
     try:
-        form = parse_form(request_body(request))
+        form = parse_form_single(request_body(request))
     except ValueError:
         return redirect("/system", flash="bad_request")
     csrf = _csrf_gate(form)
@@ -2324,7 +3389,7 @@ def system_reboot(request):
         '</div>' % icon("reboot", "ico ico-lg"), active="system"))
 
 
-# ---- Panic wipe ----
+# ---- Wipe ----
 @web_app.route("/wipe", methods=['POST'])
 def wipe_route(request):
     gate = _setup_gate(request, "/wipe")
@@ -2334,7 +3399,7 @@ def wipe_route(request):
     if auth:
         return auth
     try:
-        form = parse_form(request_body(request))
+        form = parse_form_single(request_body(request))
     except ValueError:
         return redirect("/", flash="bad_request")
     csrf = _csrf_gate(form)
@@ -2350,6 +3415,8 @@ def wipe_route(request):
                     removed += 1
                 except Exception:
                     pass
+        # Clear pins too
+        write_pins(set())
     except Exception as ex:
         print("wipe failed:", ex)
         return redirect("/", flash="bad_request")
@@ -2380,7 +3447,7 @@ async def run_script_route(request, filename):
         return auth
     if request.method == 'POST':
         try:
-            form = parse_form(request_body(request))
+            form = parse_form_single(request_body(request))
         except ValueError:
             return redirect("/", flash="bad_request")
         csrf = _csrf_gate(form)
@@ -2401,7 +3468,7 @@ def setPayload(payload_number):
     return "payload" + str(payload_number) + ".dd"
 
 
-# ---- Health (no auth, no setup gate — for external monitors) ----
+# ---- Health ----
 @web_app.route("/health")
 def health(request):
     return text_response("ok\n")
@@ -2441,9 +3508,9 @@ def api_system(request):
     return json_response(_system_facts())
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Server entry point
-# ---------------------------------------------------------------------------
+# ===========================================================================
 async def startWebService():
     HOST = repr(wifi.radio.ipv4_address_ap)
     PORT = 80

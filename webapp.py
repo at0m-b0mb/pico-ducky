@@ -51,6 +51,11 @@ CREDS_PATH = "/creds.py"
 AUDIT_LOG_PATH = "/audit.log"
 AUDIT_LOG_MAX = 32 * 1024
 PINS_PATH = "/pins.txt"
+STATS_PATH = "/stats.json"
+STATS_MAX_BYTES = 16 * 1024
+ADHOC_NAME = "_adhoc.dd"
+BUNDLE_SEP_PREFIX = "==== "
+BUNDLE_SEP_SUFFIX = " ===="
 ALLOWED_NAME_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-."
 )
@@ -203,6 +208,16 @@ ICONS = {
     "send":     '<path d="M14 2L2 7l5 2 2 5z"/>',
     "wifi":     '<path d="M2 6a8 8 0 0 1 12 0"/><path d="M4 9a5 5 0 0 1 8 0"/><circle cx="8" cy="12.5" r="1"/>',
     "shield":   '<path d="M8 1.5L2.5 4v5c0 3 2.5 5 5.5 6 3-1 5.5-3 5.5-6V4z"/>',
+    "split":    '<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M8 3v10"/>',
+    "fmt":      '<path d="M2 4h12M2 8h8M2 12h12"/>',
+    "gauge":    '<path d="M2.5 11a6 6 0 1 1 11 0"/><path d="M8 11l3-3"/><circle cx="8" cy="11" r=".5" fill="currentColor"/>',
+    "package":  '<path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3 6-3M8 8v6"/>',
+    "import":   '<path d="M8 2v8m-3-3l3 3 3-3"/><path d="M3 13h10"/>',
+    "export":   '<path d="M8 12V4m-3 3l3-3 3 3"/><path d="M3 13h10"/>',
+    "sparkle":  '<path d="M8 2v3M8 11v3M2 8h3M11 8h3M4 4l1.5 1.5M10.5 10.5L12 12M4 12l1.5-1.5M10.5 5.5L12 4"/>',
+    "history":  '<circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/>',
+    "share":    '<circle cx="3.5" cy="8" r="1.5"/><circle cx="12" cy="3.5" r="1.5"/><circle cx="12" cy="12.5" r="1.5"/><path d="M4.8 7.2l5.9-3M4.8 8.8l5.9 3"/>',
+    "globe":    '<circle cx="8" cy="8" r="6.5"/><path d="M1.5 8h13M8 1.5c2.5 3 2.5 10 0 13M8 1.5c-2.5 3-2.5 10 0 13"/>',
 }
 
 
@@ -423,6 +438,7 @@ html[data-theme="light"] .tok-var{color:#6d28d9}
 .audit{font-family:ui-monospace,monospace;font-size:12px;background:var(--input-bg);
  padding:12px;border:1px solid var(--border);border-radius:10px;
  max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-all}
+.audit .audit-line{display:block}
 .warn-list{margin:8px 0 0 0;padding-left:18px}
 .warn-list li{margin:4px 0;font-size:13px}
 .shortcut{display:inline-flex;gap:4px;align-items:center;color:var(--muted);
@@ -534,6 +550,43 @@ html[data-theme="light"] .tok-var{color:#6d28d9}
 .dropdown-menu button:hover,.dropdown-menu a:hover{background:var(--panel-2);
  color:var(--accent);text-decoration:none}
 .dropdown-menu button.danger{color:var(--danger)}
+/* Custom scrollbars */
+*::-webkit-scrollbar{width:10px;height:10px}
+*::-webkit-scrollbar-track{background:transparent}
+*::-webkit-scrollbar-thumb{background:var(--border);border-radius:5px;
+ border:2px solid transparent;background-clip:content-box}
+*::-webkit-scrollbar-thumb:hover{background:var(--accent);
+ background-clip:content-box;border:2px solid transparent}
+html{scrollbar-color:var(--border) transparent;scrollbar-width:thin}
+/* Better focus rings */
+*:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+button:focus-visible,a:focus-visible,.btn:focus-visible{outline-offset:3px}
+/* Size bar inside editor */
+.size-bar{height:4px;background:var(--input-bg);border-radius:999px;overflow:hidden;
+ border:1px solid var(--border);margin-top:8px}
+.size-bar > div{height:100%;background:linear-gradient(90deg,var(--ok),var(--accent));
+ transition:width .25s,background .25s}
+.size-bar.warn > div{background:linear-gradient(90deg,var(--warn),var(--danger))}
+/* Live editor preview split-pane */
+.split-pane{display:flex;gap:12px;align-items:stretch}
+.split-pane > *{flex:1;min-width:0}
+.split-pane .preview-pane{background:var(--input-bg);border:1px solid var(--border);
+ border-radius:9px;padding:10px 12px;overflow:auto;
+ font-family:ui-monospace,monospace;font-size:13px;line-height:1.55;
+ white-space:pre;tab-size:4;max-height:60vh}
+@media(max-width:760px){.split-pane{flex-direction:column}}
+/* Stats badge on payload rows */
+.run-stat{display:inline-flex;align-items:center;gap:4px;
+ font-size:11px;color:var(--muted);margin-left:6px;vertical-align:1px}
+.run-stat strong{color:var(--accent);font-weight:600}
+/* Quick-run card */
+.quick-run{background:linear-gradient(135deg,rgba(var(--accent-rgb),.06),
+ rgba(124,58,237,.06));border-left:3px solid var(--accent)}
+.quick-run textarea{min-height:120px}
+/* Sparkle effect on save (subtle) */
+@keyframes sparkleIn{0%{opacity:0;transform:scale(.9)}50%{opacity:1}100%{opacity:0;transform:scale(1.1)}}
+.sparkle{position:fixed;pointer-events:none;color:var(--accent);
+ animation:sparkleIn .8s ease-out forwards;z-index:200}
 @media(max-width:760px){
  header.app{flex-wrap:wrap;padding:12px 14px}
  .nav-toggle{display:inline-flex}
@@ -661,6 +714,196 @@ def toggle_pin(name):
         action = "on"
     write_pins(pins)
     return action
+
+
+# ===========================================================================
+# Stats sidecar — tracks run counts + last-run monotonic timestamps.
+# Format: a tiny JSON-ish object written by hand: {"name.dd": [runs, last]}
+# Parsed leniently (no `json` module imported to save RAM).
+# ===========================================================================
+def read_stats():
+    """Return {name: (runs, last_seconds_since_boot)}."""
+    if not file_exists(STATS_PATH):
+        return {}
+    try:
+        with open(STATS_PATH, "r") as f:
+            raw = f.read()
+    except OSError:
+        return {}
+    # Tolerant parser — accept either our hand-written format or generic JSON-ish input.
+    out = {}
+    raw = raw.strip()
+    if not raw or raw[0] != "{":
+        return {}
+    # Split top-level by commas while respecting nesting depth and strings.
+    body = raw[1:-1] if raw.endswith("}") else raw[1:]
+    i, n = 0, len(body)
+    while i < n:
+        # Skip whitespace + commas
+        while i < n and body[i] in " \t\n\r,":
+            i += 1
+        if i >= n or body[i] != '"':
+            break
+        # Parse key string
+        j = i + 1
+        while j < n and body[j] != '"':
+            if body[j] == "\\":
+                j += 2
+                continue
+            j += 1
+        key = body[i + 1:j]
+        i = j + 1
+        # Skip ":" and whitespace
+        while i < n and body[i] in " \t\n\r:":
+            i += 1
+        if i >= n or body[i] != '[':
+            continue
+        # Parse value list "[runs, last]"
+        j = body.find(']', i)
+        if j < 0:
+            break
+        nums = body[i + 1:j].split(',')
+        i = j + 1
+        try:
+            runs = int(nums[0].strip())
+            last = float(nums[1].strip()) if len(nums) > 1 else 0.0
+        except (ValueError, IndexError):
+            continue
+        out[key] = (runs, last)
+    return out
+
+
+def _write_stats(stats):
+    parts = []
+    for k in sorted(stats):
+        runs, last = stats[k]
+        parts.append('"%s":[%d,%.1f]' % (py_escape(k), int(runs), float(last)))
+    body = "{" + ",".join(parts) + "}\n"
+    if len(body) > STATS_MAX_BYTES:
+        # Drop oldest entries until under budget
+        ordered = sorted(stats.items(), key=lambda kv: kv[1][1])
+        while ordered and len(body) > STATS_MAX_BYTES:
+            ordered.pop(0)
+            stats = dict(ordered)
+            parts = ['"%s":[%d,%.1f]' % (py_escape(k), int(s[0]), float(s[1]))
+                     for k, s in sorted(stats.items())]
+            body = "{" + ",".join(parts) + "}\n"
+    try:
+        _remount_rw()
+        with open(STATS_PATH, "w") as f:
+            f.write(body)
+    finally:
+        _remount_ro()
+
+
+def record_run(name):
+    stats = read_stats()
+    runs, _ = stats.get(name, (0, 0.0))
+    stats[name] = (runs + 1, time.monotonic())
+    try:
+        _write_stats(stats)
+    except Exception as ex:
+        print("stats write failed:", ex)
+
+
+def forget_stats(name):
+    stats = read_stats()
+    if name in stats:
+        del stats[name]
+        try:
+            _write_stats(stats)
+        except Exception:
+            pass
+
+
+def humanize_ago(seconds_then):
+    """seconds_then is a `time.monotonic()` value from the past."""
+    if not seconds_then:
+        return ""
+    delta = int(time.monotonic() - seconds_then)
+    if delta < 0:
+        return "just now"
+    if delta < 60:
+        return "%ds ago" % delta
+    m, _ = divmod(delta, 60)
+    if m < 60:
+        return "%dm ago" % m
+    h, _ = divmod(m, 60)
+    if h < 24:
+        return "%dh ago" % h
+    d, _ = divmod(h, 24)
+    return "%dd ago" % d
+
+
+# ===========================================================================
+# Bundle import / export — a single file containing many payloads.
+# Format:  "==== name.dd ====\n<contents>\n==== other.dd ====\n..."
+# ===========================================================================
+def export_bundle():
+    """Concatenate every payload into a single bundle string."""
+    out = ["# Pico Ducky bundle\n",
+           "# Exported at +%.1fs since boot\n" % (time.monotonic() - BOOT_TIME),
+           "# Header below each separator names the payload.\n\n"]
+    payloads = sorted(p[0] for p in list_payloads())
+    for name in payloads:
+        try:
+            with open(name, "r") as f:
+                body = f.read()
+        except OSError:
+            continue
+        out.append("%s%s%s\n" % (BUNDLE_SEP_PREFIX, name, BUNDLE_SEP_SUFFIX))
+        if not body.endswith("\n"):
+            body += "\n"
+        out.append(body)
+    return "".join(out)
+
+
+def parse_bundle(text):
+    """Yield (filename, contents) tuples from a bundle blob."""
+    lines = text.splitlines()
+    current_name = None
+    buf = []
+    for line in lines:
+        if line.startswith(BUNDLE_SEP_PREFIX) and line.endswith(BUNDLE_SEP_SUFFIX):
+            if current_name is not None:
+                yield current_name, "\n".join(buf).rstrip("\n") + "\n"
+            current_name = line[len(BUNDLE_SEP_PREFIX):-len(BUNDLE_SEP_SUFFIX)].strip()
+            buf = []
+        elif current_name is not None:
+            buf.append(line)
+    if current_name is not None and buf:
+        yield current_name, "\n".join(buf).rstrip("\n") + "\n"
+
+
+# ===========================================================================
+# PWA manifest
+# ===========================================================================
+def pwa_manifest_json():
+    return _to_json({
+        "name": "Pico Ducky",
+        "short_name": "PicoDucky",
+        "description": "Secure control panel for the Pico W USB Ducky",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#070b18",
+        "theme_color": "#22d3ee",
+        "icons": [
+            {"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"}
+        ],
+    })
+
+
+def pwa_icon_svg():
+    """A tiny gradient 'D' icon served as image/svg+xml."""
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">'
+        '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+        '<stop offset="0" stop-color="#22d3ee"/>'
+        '<stop offset="1" stop-color="#7c3aed"/></linearGradient></defs>'
+        '<rect width="192" height="192" rx="38" fill="url(#g)"/>'
+        '<text x="50%" y="58%" text-anchor="middle" font-family="-apple-system,sans-serif" '
+        'font-size="120" font-weight="800" fill="#06121f">D</text></svg>'
+    )
 
 
 # ===========================================================================
@@ -921,6 +1164,10 @@ def layout(title, body, active="home", flash=None):
         '<meta charset="utf-8"><title>%s &middot; Pico Ducky</title>'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="color-scheme" content="dark light">'
+        '<meta name="theme-color" content="#22d3ee">'
+        '<link rel="manifest" href="/manifest.json">'
+        '<link rel="icon" type="image/svg+xml" href="/icon.svg">'
+        '<link rel="apple-touch-icon" href="/icon.svg">'
         '<style>%s</style><script>%s</script></head><body>'
         '%s%s'
         '<div class="wrap">%s</div>'
@@ -1666,6 +1913,9 @@ FLASH_MESSAGES = {
     "token_cleared": ("ok",   "API token cleared."),
     "factory_reset": ("ok",   "Factory reset complete. Set up the device again."),
     "bulk_done":     ("ok",   "Bulk action completed."),
+    "quick_ran":     ("ok",   "Ad-hoc script executed."),
+    "imported":      ("ok",   "Bundle imported."),
+    "empty_bundle":  ("err",  "Bundle had no valid payload sections."),
     "bad_name":      ("err",  "Invalid filename. Use A-Z, 0-9, _, - and end in .dd"),
     "too_big":       ("err",  "Payload too large."),
     "not_found":     ("err",  "Payload not found."),
@@ -1833,8 +2083,20 @@ def render_home(flash=None, tag_filter=None):
     if tag_filter:
         detailed = [r for r in detailed if tag_filter in r[4]]
     facts = _system_facts()
+    stats = read_stats()
     if not detailed and not tag_filter:
         body = (
+            '<div class="card quick-run">'
+            '<div class="row"><h2>%s Quick run</h2>'
+            '<span class="badge muted">no save</span>'
+            '<div class="spacer"></div></div>'
+            '<form method="post" action="/quick-run">'
+            '%s'
+            '<div class="field"><label>Type DuckyScript and run it now — no file written.</label>'
+            '<textarea name="scriptData" placeholder="DELAY 200&#10;STRING Hello!&#10;ENTER" required></textarea></div>'
+            '<div class="row"><button class="btn primary" type="submit" '
+            'onclick="return confirm(\'Run this script?\')">%s Run now</button></div>'
+            '</form></div>'
             '<div class="card"><div class="empty">'
             '%s'
             '<h1>No payloads yet</h1>'
@@ -1843,9 +2105,11 @@ def render_home(flash=None, tag_filter=None):
             '<a class="btn primary" href="/templates">%s Browse templates</a>'
             '<a class="btn" href="/new">%s New script</a>'
             '<a class="btn" href="/upload">%s Upload</a>'
+            '<a class="btn ghost" href="/import-bundle">%s Import bundle</a>'
             '</div></div></div>'
-        ) % (icon("snippet", "ico ico-xl"),
-             icon("template"), icon("plus"), icon("upload"))
+        ) % (icon("send", "ico ico-lg"), csrf_field(), icon("play"),
+             icon("snippet", "ico ico-xl"),
+             icon("template"), icon("plus"), icon("upload"), icon("import"))
         return layout("Payloads", body, active="home", flash=flash)
 
     # Gather every tag across visible payloads for filter chips
@@ -1864,6 +2128,12 @@ def render_home(flash=None, tag_filter=None):
                 '<a class="chip" href="/?tag=%s">%s%s</a>' %
                 (html_escape(t), icon("tag"), html_escape(t)) for t in tags
             ) + '</div>'
+        run_count, last_run = stats.get(name, (0, 0.0))
+        run_html = ''
+        if run_count:
+            run_html = ('<span class="run-stat" title="Run history">%s'
+                        '<strong>%d</strong>&times; %s</span>') % (
+                icon("history"), run_count, html_escape(humanize_ago(last_run)))
         star_icon = icon("star")
         star_cls = "active" if pinned else ""
         rows.append(
@@ -1874,7 +2144,7 @@ def render_home(flash=None, tag_filter=None):
             '%s<button class="icon-btn %s" type="submit" '
             'style="width:28px;height:28px" title="%s">%s</button></form>'
             '</td>'
-            '<td><strong>%s</strong>%s</td>'
+            '<td><strong>%s</strong>%s%s</td>'
             '<td class="hide-sm muted">%s</td>'
             '<td><div class="actions">'
             '<a class="btn small" href="/edit/%s">%s Edit</a>'
@@ -1902,7 +2172,7 @@ def render_home(flash=None, tag_filter=None):
                safe,
                safe, csrf_field(), star_cls,
                "Unpin" if pinned else "Pin", star_icon,
-               safe, tag_html,
+               safe, tag_html, run_html,
                format_size(size),
                safe, icon("edit"),
                icon("more"),
@@ -1948,7 +2218,27 @@ def render_home(flash=None, tag_filter=None):
                           '<span class="muted" style="font-size:12px">'
                           '%s Tags</span>%s</div></div>') % (icon("tag"), chips)
 
+    quick_run = (
+        '<div class="card quick-run">'
+        '<div class="row"><h2>%s Quick run</h2>'
+        '<span class="badge muted">no save</span>'
+        '<div class="spacer"></div></div>'
+        '<form method="post" action="/quick-run">'
+        '%s'
+        '<div class="field"><label>Type DuckyScript and run it now — '
+        'no file written, perfect for one-off tests.</label>'
+        '<textarea name="scriptData" placeholder="DELAY 200&#10;STRING Hello!&#10;ENTER" required></textarea></div>'
+        '<div class="row">'
+        '<button class="btn primary" type="submit" '
+        'onclick="return confirm(\'Run this script? Keystrokes will be injected into the host.\')">'
+        '%s Run now</button>'
+        '<span class="muted" style="font-size:12px">'
+        'Stored as <span class="kbd">%s</span> while running.</span>'
+        '</div></form></div>'
+    ) % (icon("send", "ico ico-lg"), csrf_field(), icon("play"), ADHOC_NAME)
+
     body = (
+        '%s'
         '%s'
         '<div class="bulk-bar" id="bulkBar">'
         '<span><strong id="selN">0</strong> selected</span>'
@@ -1967,6 +2257,12 @@ def render_home(flash=None, tag_filter=None):
         '<a class="btn" href="/templates">%s Templates</a>'
         '<a class="btn" href="/upload">%s Upload</a>'
         '<a class="btn ghost" href="/search">%s Search</a>'
+        '<div class="dropdown">'
+        '<button class="btn ghost" type="button">%s Bundle</button>'
+        '<div class="dropdown-menu">'
+        '<a href="/export-bundle">%s Export all</a>'
+        '<a href="/import-bundle">%s Import bundle</a>'
+        '</div></div>'
         '<form method="post" action="/wipe" style="display:inline">'
         '%s<button class="btn danger" type="submit" '
         'onclick="return confirm(\'WIPE ALL payloads? This cannot be undone.\')'
@@ -2018,9 +2314,10 @@ def render_home(flash=None, tag_filter=None):
         'sa.addEventListener("change",function(){document.querySelectorAll(".row-check").forEach(function(c){c.checked=sa.checked});updateBulk()});'
         'bc.addEventListener("click",function(){document.querySelectorAll(".row-check").forEach(function(c){c.checked=false});sa.checked=false;updateBulk()});'
         '</script>'
-    ) % (hero, csrf_field(), icon("trash"),
+    ) % (quick_run, hero, csrf_field(), icon("trash"),
          len(detailed),
          icon("plus"), icon("template"), icon("upload"), icon("search"),
+         icon("package"), icon("export"), icon("import"),
          csrf_field(), icon("trash"),
          tag_filter_bar,
          ''.join(rows))
@@ -2080,15 +2377,24 @@ def render_editor(filename, contents, flash=None, warnings=None):
         '<form method="post" action="/write/%s" id="ed">'
         '%s'
         '<div class="field">'
-        '<label>Script <span class="shortcut">'
+        '<div class="row" style="margin-bottom:6px">'
+        '<label style="margin:0">Script <span class="shortcut">'
         '<span class="kbd">Ctrl</span>+<span class="kbd">S</span> save '
         '&middot; <span class="kbd">Ctrl</span>+<span class="kbd">F</span> find</span></label>'
-        '<div class="editor-wrap">'
+        '<div class="spacer"></div>'
+        '<button type="button" class="btn small ghost" id="fmtBtn" title="Auto-format">%s Format</button>'
+        '<button type="button" class="btn small ghost" id="prevBtn" title="Toggle live preview">%s Preview</button>'
+        '</div>'
+        '<div class="split-pane">'
+        '<div class="editor-wrap" style="flex:1">'
         '<pre class="line-nums" id="lns" aria-hidden="true">1</pre>'
         '<textarea name="scriptData" id="ta" data-name="%s" spellcheck="false">%s</textarea>'
         '</div>'
+        '<pre class="preview-pane code-preview" id="preview" style="display:none"></pre>'
+        '</div>'
         '<p class="muted" id="stats" style="margin:6px 0 0 0;font-size:12px">'
-        'Max %s. Tip: click a snippet below to insert; press <span class="kbd">?</span> for shortcuts.</p>'
+        'Max %s. Click a snippet below to insert; press <span class="kbd">?</span> for shortcuts.</p>'
+        '<div class="size-bar" id="sizeBar"><div style="width:0%%"></div></div>'
         '</div>'
         '<div class="sticky-bar">'
         '<button class="btn primary" type="submit">%s Save</button>'
@@ -2105,13 +2411,75 @@ def render_editor(filename, contents, flash=None, warnings=None):
         '<script>'
         'var ta=document.getElementById("ta"),st=document.getElementById("stats"),'
         'rb=document.getElementById("restoreBtn"),lns=document.getElementById("lns"),'
+        'sb=document.getElementById("sizeBar").firstElementChild,'
+        'sbWrap=document.getElementById("sizeBar"),'
+        'pv=document.getElementById("preview"),pvBtn=document.getElementById("prevBtn"),'
+        'fmtBtn=document.getElementById("fmtBtn"),'
+        'MAX=%d,'
         'dk="pd:draft:"+ta.dataset.name;'
+        # Lightweight client-side highlighter mirroring the server-side one.
+        'function hl(text){var out="";var lines=text.split("\\n");'
+        'function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}'
+        'for(var li=0;li<lines.length;li++){var raw=lines[li];'
+        'var stripped=raw.replace(/^\\s+/,"");var lead=raw.slice(0,raw.length-stripped.length);'
+        'out+=esc(lead);'
+        'if(!stripped){out+="\\n";continue}'
+        'if(stripped.toUpperCase().indexOf("REM")===0){out+="<span class=\\"tok-com\\">"+esc(stripped)+"</span>\\n";continue}'
+        'var sp=stripped.split(/\\s+/);var cmd=sp[0];var rest=stripped.substring(cmd.length).replace(/^\\s+/,"");'
+        'out+="<span class=\\"tok-cmd\\">"+esc(cmd)+"</span>";'
+        'if(rest){out+=" ";'
+        'var cu=cmd.toUpperCase();'
+        'if(cu==="STRING"||cu==="STRINGLN"||cu==="PRINTSTRING"){'
+        'out+="<span class=\\"tok-str\\">"+esc(rest)+"</span>"'
+        '}else{'
+        'var i=0,buf="";while(i<rest.length){var c=rest[i];'
+        'if(c==="$"){if(buf){out+=esc(buf);buf=""}var j=i+1;'
+        'while(j<rest.length&&/[A-Za-z0-9_]/.test(rest[j]))j++;'
+        'out+="<span class=\\"tok-var\\">"+esc(rest.slice(i,j))+"</span>";i=j}'
+        'else if(/[0-9]/.test(c)){if(buf){out+=esc(buf);buf=""}var j=i;'
+        'while(j<rest.length&&/[0-9]/.test(rest[j]))j++;'
+        'out+="<span class=\\"tok-num\\">"+esc(rest.slice(i,j))+"</span>";i=j}'
+        'else if("=+-*/<>!&|()".indexOf(c)>=0){'
+        'if(buf){out+=esc(buf);buf=""}out+="<span class=\\"tok-op\\">"+esc(c)+"</span>";i++}'
+        'else{buf+=c;i++}}'
+        'if(buf)out+=esc(buf)}}'
+        'out+="\\n"}return out}'
         'function upd(){var lc=ta.value.split("\\n").length,b=ta.value.length;'
-        'st.innerText=lc+" lines \\u00B7 "+b+" bytes";'
+        'st.innerText=lc+" lines \\u00B7 "+b+" bytes \\u00B7 "+Math.round(100*b/MAX)+"%% of max";'
         'var s="";for(var i=1;i<=lc;i++)s+=i+"\\n";lns.textContent=s;'
+        'var pct=Math.min(100,Math.round(100*b/MAX));sb.style.width=pct+"%%";'
+        'sbWrap.classList.toggle("warn",pct>=85);'
+        'if(pv.style.display!=="none")pv.innerHTML=hl(ta.value);'
         'try{localStorage.setItem(dk,ta.value)}catch(e){}}'
         'ta.addEventListener("input",upd);'
         'ta.addEventListener("scroll",function(){lns.scrollTop=ta.scrollTop});'
+        # Live-preview toggle
+        'pvBtn.addEventListener("click",function(){'
+        'var on=pv.style.display==="none";pv.style.display=on?"":"none";'
+        'pvBtn.classList.toggle("active",on);if(on)pv.innerHTML=hl(ta.value)});'
+        # Auto-format: trim trailing ws, normalize tabs, uppercase first token
+        'fmtBtn.addEventListener("click",function(){'
+        'var KW=["REM","DELAY","DEFAULT_DELAY","STRING","STRINGLN","PRINTSTRING",'
+        '"STRING_DELAY","ENTER","TAB","ESCAPE","ESC","BACKSPACE","SPACE","DELETE",'
+        '"INSERT","HOME","END","PAGEUP","PAGEDOWN","CAPSLOCK","UP","DOWN","LEFT","RIGHT",'
+        '"GUI","WINDOWS","COMMAND","ALT","OPTION","CTRL","CONTROL","SHIFT","APP","MENU",'
+        '"VAR","IF","ELSE","END_IF","WHILE","END_WHILE","FUNCTION","END_FUNCTION","RETURN",'
+        '"HOLD","RELEASE","WAIT_FOR_BUTTON_PRESS","REPEAT"];'
+        'var KS=new Set(KW);'
+        'var lines=ta.value.split("\\n").map(function(ln){'
+        'ln=ln.replace(/\\t/g,"  ").replace(/\\s+$/,"");'
+        'if(!ln.trim())return ln;'
+        'if(ln.trimStart().startsWith("$"))return ln;'
+        'var m=ln.match(/^(\\s*)(\\S+)(.*)$/);if(!m)return ln;'
+        'var w=m[2].toUpperCase();'
+        'if(KS.has(w))return m[1]+w+m[3];return ln;'
+        '});'
+        # Collapse 3+ blank lines into 1
+        'var out=[],blanks=0;'
+        'for(var i=0;i<lines.length;i++){if(lines[i].trim()===""){blanks++;if(blanks<2)out.push("")}'
+        'else{blanks=0;out.push(lines[i])}}'
+        'ta.value=out.join("\\n").replace(/\\n+$/,"")+"\\n";upd();'
+        '});'
         'upd();'
         'try{var d=localStorage.getItem(dk);'
         'if(d&&d!==ta.value){rb.style.display="";'
@@ -2162,6 +2530,7 @@ def render_editor(filename, contents, flash=None, warnings=None):
          icon("back"),
          warn_html,
          safe, csrf_field(),
+         icon("fmt"), icon("split"),
          safe, html_escape(contents),
          format_size(MAX_PAYLOAD_BYTES),
          icon("save"), icon("find"),
@@ -2170,7 +2539,8 @@ def render_editor(filename, contents, flash=None, warnings=None):
          restore_html,
          icon("back"),
          icon("snippet"), snip_buttons,
-         find_modal)
+         find_modal,
+         MAX_PAYLOAD_BYTES)
     return layout("Edit " + filename, body, active="home", flash=flash)
 
 
@@ -2250,6 +2620,31 @@ def render_upload(flash=None):
     ) % (icon("upload", "ico ico-lg"), icon("upload", "ico ico-lg"),
          csrf_field(), icon("upload"), icon("back"))
     return layout("Upload", body, active="upload", flash=flash)
+
+
+def render_import_bundle(flash=None):
+    body = (
+        '<div class="card"><h1>%s Import bundle</h1>'
+        '<p class="muted">Paste a bundle exported from this device (or another '
+        'Pico Ducky). Each <span class="kbd">==== name.dd ====</span> header '
+        'starts a new payload. Conflicts will <strong>not</strong> overwrite '
+        'unless you tick the box below.</p>'
+        '<form method="post" action="/import-bundle">'
+        '%s'
+        '<div class="field"><label>Bundle text</label>'
+        '<textarea name="bundle" placeholder="==== example.dd ====&#10;'
+        'REM your payload here&#10;STRING hello&#10;ENTER" '
+        'spellcheck="false" required></textarea></div>'
+        '<div class="field"><label class="row" style="gap:6px;margin:0">'
+        '<input type="checkbox" name="overwrite" value="1"> Overwrite existing payloads</label></div>'
+        '<div class="row">'
+        '<button class="btn primary" type="submit">%s Import</button>'
+        '<a class="btn" href="/">%s Cancel</a>'
+        '<a class="btn ghost" href="/export-bundle">%s Export current</a>'
+        '</div></form></div>'
+    ) % (icon("import", "ico ico-lg"), csrf_field(),
+         icon("import"), icon("back"), icon("export"))
+    return layout("Import bundle", body, active="home", flash=flash)
 
 
 def render_snippets(flash=None):
@@ -2459,6 +2854,11 @@ def render_audit(flash=None):
     tail = read_audit_tail()
     if not tail:
         tail = "(empty)"
+    # Wrap each line in a span so we can filter client-side.
+    lines = tail.splitlines()
+    line_html = '\n'.join(
+        '<span class="audit-line">%s</span>' % html_escape(ln) for ln in lines
+    ) if lines else html_escape(tail)
     body = (
         '<div class="card"><div class="row">'
         '<h1>%s Audit log</h1><div class="spacer"></div>'
@@ -2468,9 +2868,20 @@ def render_audit(flash=None):
         '</form></div>'
         '<p class="muted">Most recent entries (truncated to last 12 KB). '
         'Times are seconds since boot.</p>'
-        '<pre class="audit">%s</pre></div>'
-    ) % (icon("audit", "ico ico-lg"), csrf_field(), icon("trash"),
-         html_escape(tail))
+        '<div class="field" style="margin-top:8px">'
+        '<input id="afilter" class="input" placeholder="Filter lines (e.g. payload.run, auth.fail)...">'
+        '</div>'
+        '<pre class="audit" id="alog">%s</pre></div>'
+        '<script>'
+        '(function(){var f=document.getElementById("afilter"),'
+        'spans=document.querySelectorAll("#alog .audit-line");'
+        'f.addEventListener("input",function(){'
+        'var q=f.value.toLowerCase();'
+        'spans.forEach(function(s){'
+        's.style.display=s.innerText.toLowerCase().indexOf(q)>-1?"":"none"})});'
+        '})();'
+        '</script>'
+    ) % (icon("audit", "ico ico-lg"), csrf_field(), icon("trash"), line_html)
     return layout("Audit", body, active="audit", flash=flash)
 
 
@@ -3457,6 +3868,7 @@ async def run_script_route(request, filename):
     if not name or not file_exists(name):
         return redirect("/", flash="not_found")
     audit("payload.run", name)
+    record_run(name)
     print("run_script", name)
     await runScript(name)
     return redirect("/", flash="ran")
@@ -3466,6 +3878,121 @@ def setPayload(payload_number):
     if payload_number == 1:
         return "payload.dd"
     return "payload" + str(payload_number) + ".dd"
+
+
+# ---- Quick-run ad-hoc ----
+@web_app.route("/quick-run", methods=['POST'])
+async def quick_run_route(request):
+    gate = _setup_gate(request, "/quick-run")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    try:
+        form = parse_form_single(request_body(request))
+    except ValueError:
+        return redirect("/", flash="too_big")
+    csrf = _csrf_gate(form)
+    if csrf:
+        return csrf
+    data = (form.get('scriptData') or '').strip()
+    if not data:
+        return redirect("/", flash="bad_request")
+    if len(data) > MAX_PAYLOAD_BYTES:
+        return redirect("/", flash="too_big")
+    try:
+        write_file_safely(ADHOC_NAME, data, backup=False)
+    except Exception as ex:
+        print("quick-run write failed:", ex)
+        return redirect("/", flash="bad_request")
+    audit("payload.quick_run", "%dB" % len(data))
+    record_run(ADHOC_NAME)
+    try:
+        await runScript(ADHOC_NAME)
+    finally:
+        # Clean up the temp file so it never shows in the manager.
+        try:
+            delete_file_safely(ADHOC_NAME)
+        except Exception:
+            pass
+        forget_stats(ADHOC_NAME)
+    return redirect("/", flash="quick_ran")
+
+
+# ---- Export bundle ----
+@web_app.route("/export-bundle")
+def export_bundle_route(request):
+    gate = _setup_gate(request, "/export-bundle")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    body = export_bundle()
+    audit("bundle.export", "%dB" % len(body))
+    return text_response(body, filename="pico-ducky-bundle.ducky")
+
+
+# ---- Import bundle ----
+@web_app.route("/import-bundle", methods=['GET', 'POST'])
+def import_bundle_route(request):
+    gate = _setup_gate(request, "/import-bundle")
+    if gate:
+        return gate
+    auth = _auth_gate(request)
+    if auth:
+        return auth
+    if request.method == 'GET':
+        return html_response(render_import_bundle(flash=get_flash(request)))
+    try:
+        form = parse_form_single(request_body(request))
+    except ValueError:
+        return redirect("/import-bundle", flash="too_big")
+    csrf = _csrf_gate(form)
+    if csrf:
+        return csrf
+    bundle = form.get('bundle') or ''
+    overwrite = bool(form.get('overwrite'))
+    if not bundle.strip():
+        return redirect("/import-bundle", flash="bad_request")
+    imported = 0
+    skipped = 0
+    for raw_name, contents in parse_bundle(bundle):
+        name = normalize_payload_name(raw_name)
+        if not name:
+            skipped += 1
+            continue
+        if len(contents) > MAX_PAYLOAD_BYTES:
+            skipped += 1
+            continue
+        if file_exists(name) and not overwrite:
+            skipped += 1
+            continue
+        try:
+            write_file_safely(name, contents, backup=overwrite)
+            imported += 1
+        except Exception:
+            skipped += 1
+    if not imported and not skipped:
+        return redirect("/import-bundle", flash="empty_bundle")
+    audit("bundle.import", "imported=%d skipped=%d" % (imported, skipped))
+    return redirect("/", flash="imported")
+
+
+# ---- PWA manifest + icon ----
+@web_app.route("/manifest.json")
+def manifest_route(request):
+    return ("200 OK",
+            [("Content-Type", "application/manifest+json")] + list(SEC_HEADERS),
+            pwa_manifest_json())
+
+
+@web_app.route("/icon.svg")
+def icon_route(request):
+    return ("200 OK",
+            [("Content-Type", "image/svg+xml")] + list(SEC_HEADERS),
+            pwa_icon_svg())
 
 
 # ---- Health ----
@@ -3489,6 +4016,7 @@ async def api_run(request, filenumber):
     if not file_exists(name):
         return text_response("not found", status="404 Not Found")
     audit("api.run", name)
+    record_run(name)
     await runScript(name)
     return text_response("ok\n")
 

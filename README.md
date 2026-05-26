@@ -130,9 +130,16 @@ token, and submit. The wizard writes `creds.py` to the device for you and
 locks down the UI behind HTTP Basic auth.
 
 #### UI features
-- **Animated aurora backdrop** — subtle CSS-only gradient that drifts behind
-  the cards; respects the dark/light theme
-- **Dark / light theme** toggle in the header, persisted to `localStorage`
+- **Installable PWA** — the device serves a `/manifest.json` and SVG app
+  icon, so phones and desktops can "Add to home screen" / "Install" the
+  control panel as a standalone app
+- **Animated aurora backdrop** that follows the current accent color
+- **Three themes** — dark, light, and OLED-black — cycled with the header
+  button and persisted per-browser
+- **Six accent colors** — cyan, violet, emerald, amber, rose, sky —
+  pickable from the Settings page
+- **Polish**: custom scrollbars, accent-coloured focus rings, gentle card
+  fade-up animations, primary-button shimmer-on-hover
 - **Toast notifications** — flash messages slide in from the corner and
   auto-dismiss after ~4.5 seconds (replaces the old top-banner alerts)
 - **Inline SVG icons** throughout every nav link, button, action, header,
@@ -146,8 +153,13 @@ locks down the UI behind HTTP Basic auth.
   (Edit, Preview, Download, Clone, Run, Delete) — every destructive action
   requires confirmation
 - **Editor** with snippet quick-insert sidebar, live line/byte counter,
-  `Ctrl+S` / `Cmd+S` to save, **backup-on-save** with one-click "Restore
-  previous" button, and automatic draft auto-save to localStorage
+  **payload size bar** (with warn state past 85% of the 64 KB limit),
+  **line-number gutter**, `Ctrl+S` / `Cmd+S` to save, **`Ctrl+F` find &
+  replace** modal, **backup-on-save** with one-click "Restore previous"
+  button, **auto-format** button (normalizes whitespace, uppercases
+  commands, collapses excess blank lines), **live syntax-highlighted
+  preview** in a split-pane (toggle on/off), and automatic draft
+  auto-save to localStorage
 - **Syntax-highlighted preview** page (`/preview/<name>`) — commands,
   strings, numbers, `$variables` and operators colorized
 - **DuckyScript linter** — runs on save, surfaces typos in command names,
@@ -168,8 +180,16 @@ locks down the UI behind HTTP Basic auth.
   follows a rename and gets removed with its payload
 - **Wipe all** payloads (double-confirm) for fast cleanup
 - **Snippets** reference page with one-click copy-to-clipboard
+- **Quick-run** on the dashboard — type a one-off DuckyScript and execute
+  it without saving a file
+- **Per-payload run statistics** — run counts and humanized "last ran 3m
+  ago" badges in the payload list (stored in `/stats.json`)
+- **Bundle export / import** — download every payload as a single
+  `pico-ducky-bundle.ducky` file, or paste a bundle to import many
+  payloads at once (with optional overwrite)
 - **Audit log** at `/audit` showing recent actions (auth fails, payload
-  edits, runs, restores, reboots, wipes…), with bounded size and a Clear button
+  edits, runs, restores, reboots, wipes…), with a **live filter input**
+  for quick searches and a bounded size + Clear button
 - **Logout** button forces the browser to drop cached Basic Auth credentials
 - **Health endpoint** at `/health` (no auth, no setup gate) returning
   `ok` plain text — useful for uptime monitors
@@ -219,6 +239,11 @@ GET  /system                live device status
 POST /system/reboot         soft reboot (CSRF)
 GET  /logout                drop cached Basic Auth credentials
 GET  /health                public liveness check ("ok" 200)
+POST /quick-run             execute an ad-hoc one-off DuckyScript (CSRF)
+GET  /export-bundle         download every payload as one bundle file
+GET  /import-bundle  POST   paste-and-import a bundle of payloads (CSRF on POST)
+GET  /manifest.json         PWA manifest (no auth — needed for install)
+GET  /icon.svg              PWA icon (no auth)
 ```
 
 #### Machine-friendly API
@@ -252,10 +277,19 @@ and refuses to do anything else until you set credentials.
 - `?` — open the shortcuts modal (anywhere outside a text field)
 - `Esc` — close any open modal
 - `Ctrl+S` / `Cmd+S` — save (in the editor)
+- `Ctrl+F` / `Cmd+F` — find & replace (in the editor)
 - `/` — focus the search box (on the search page)
 - Click a snippet in the sidebar — insert at cursor
+- Click the ⭐ on a payload row — pin / unpin
 - Reopen a payload after closing the tab without saving — the editor
   offers to restore your unsaved draft
+
+### Files the device creates
+- `/creds.py` — your username/password/API token (kept secret)
+- `/audit.log` — append-only action log, rotates at 32 KB
+- `/pins.txt` — one filename per line; payloads pinned to the top
+- `/stats.json` — run counts + last-run timestamps per payload
+- `/<name>.dd.bak` — automatic backup written before every save
 
 ## Setup mode
 
